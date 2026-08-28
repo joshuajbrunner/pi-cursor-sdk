@@ -7,6 +7,7 @@ import type {
 	CursorPiToolBridgeSnapshotApi,
 } from "./cursor-pi-tool-bridge-types.js";
 import { asRecord } from "./cursor-record-utils.js";
+import { resolveCursorPiToolTransport, type CursorPiToolTransport } from "./cursor-executor-transport.js";
 import type { CursorPiToolBridgeRunImpl } from "./cursor-pi-tool-bridge-run.js";
 import {
 	buildCursorPiToolBridgeSnapshot,
@@ -37,6 +38,10 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 
 	isEnabled(): boolean {
 		return resolveCursorPiToolBridgeEnabled(this.env);
+	}
+
+	getTransport(): CursorPiToolTransport {
+		return resolveCursorPiToolTransport(this.env);
 	}
 
 	getToolSurfaceSignature(): string {

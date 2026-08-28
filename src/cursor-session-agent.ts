@@ -7,6 +7,7 @@ import {
 	type CursorPiToolBridgeRun,
 } from "./cursor-pi-tool-bridge.js";
 import { computeCursorContextFingerprint } from "./context.js";
+import { resolveCursorPiToolTransport } from "./cursor-executor-transport.js";
 import { getCursorSessionFile, getCursorSessionScopeGeneration, getCursorSessionScopeKey } from "./cursor-session-scope.js";
 import {
 	getMatchingCursorSessionAgentResumeHandle,
@@ -208,7 +209,7 @@ function buildApiKeyPoolKeyFingerprint(apiKey: string): string {
 function buildBridgePoolKeySuffix(): string {
 	const registeredBridge = getRegisteredCursorPiToolBridge();
 	if (!registeredBridge) return "bridge:absent";
-	return registeredBridge.getToolSurfaceSignature();
+	return `${registeredBridge.getToolSurfaceSignature()}:transport:${registeredBridge.getTransport()}`;
 }
 
 function buildSessionAgentPoolKey(scopeKey: string, params: SessionCursorAgentCreateParams): string {
@@ -446,6 +447,7 @@ async function createSessionAgentEntry(
 	let sessionStore: OpenCursorSessionStore | undefined;
 	try {
 		const registeredBridge = getRegisteredCursorPiToolBridge();
+		const bridgeTransport = registeredBridge?.getTransport() ?? resolveCursorPiToolTransport();
 		if (registeredBridge) {
 			bridgeRun = await registeredBridge.createRun({
 				onToolRequest: params.onBridgeToolRequest,
@@ -478,6 +480,7 @@ async function createSessionAgentEntry(
 		const { identities } = storeSelection;
 		const resumeAttemptAllowed = storeSelection.resumeAttemptAllowed;
 		let resumeNotice = storeSelection.resumeFallback ? LOCAL_RESUME_FALLBACK_NOTICE : undefined;
+		const attachBridgeToCursor = bridgeTransport === "mcp";
 		const buildAgentOptions = () => ({
 			apiKey: params.apiKey,
 			model: params.modelSelection,
@@ -488,7 +491,7 @@ async function createSessionAgentEntry(
 				localSafety: params.localSafety,
 				store: sessionStore!.store,
 			}),
-			...(bridgeRun?.mcpServers ? { mcpServers: bridgeRun.mcpServers } : {}),
+			...(attachBridgeToCursor && bridgeRun?.mcpServers ? { mcpServers: bridgeRun.mcpServers } : {}),
 		});
 		let agent: SDKAgent | undefined;
 		let effectiveSendState = sendState;

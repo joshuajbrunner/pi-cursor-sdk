@@ -1,6 +1,7 @@
 import type { McpServerConfig } from "@cursor/sdk";
 import type { Context, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { CursorSdkEventDebugRecorder } from "./cursor-sdk-event-debug.js";
+import type { CursorPiToolTransport } from "./cursor-executor-transport.js";
 import type {
 	ExtensionAPI,
 	ExtensionHandler,
@@ -73,6 +74,7 @@ export interface CursorPiToolBridgeRun {
 
 export interface CursorPiToolBridge {
 	isEnabled(): boolean;
+	getTransport(): CursorPiToolTransport;
 	getToolSurfaceSignature(): string;
 	createRun(options?: CursorPiToolBridgeRunOptions): Promise<CursorPiToolBridgeRun>;
 	disposeAll(reason?: string): Promise<void>;

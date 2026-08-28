@@ -32,6 +32,33 @@ describe("cursor-tool-manifest", () => {
 		expect(text).toContain("cursor-replay-*");
 	});
 
+	it("routes bridge guidance through Executor Shell commands in executor mode", () => {
+		const text = buildCursorToolManifestText({
+			piBridgeEnabled: true,
+			transport: "executor",
+			bridgeSnapshot: {
+				tools: [
+					{
+						piToolName: "intercom",
+						mcpToolName: "pi__intercom",
+						description: "message peers",
+						inputSchema: { type: "object" },
+						sourceInfo: { source: "extension", path: "test", scope: "temporary", origin: "top-level" },
+					},
+				],
+				mcpToolNameToPiToolName: new Map([["pi__intercom", "intercom"]]),
+				piToolNameToMcpToolName: new Map([["intercom", "pi__intercom"]]),
+			},
+		});
+
+		expect(text).toContain("Executor CLI, not Cursor MCP");
+		expect(text).toContain("executor tools search '<real pi tool name>'");
+		expect(text).not.toContain("bridge.json");
+		expect(text).toContain("intercom");
+		expect(text).not.toContain("pi__");
+		expect(text).not.toContain("call exposed pi__* MCP names");
+	});
+
 	it("omits bridge lines when pi bridge guidance is disabled", () => {
 		const text = buildCursorToolManifestText({
 			includePiBridgeGuidance: false,

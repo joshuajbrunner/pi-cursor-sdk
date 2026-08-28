@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import {
 	CallToolRequestSchema,
 	ListToolsRequestSchema,
+	isInitializeRequest,
 	type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { bridgeToolExecutionAbortTracker } from "./cursor-pi-tool-bridge-abort.js";
@@ -19,6 +20,14 @@ import {
 	writeCursorPiToolBridgeDiagnostic,
 } from "./cursor-pi-tool-bridge-diagnostics.js";
 import { resolveCursorPiToolBridgeCallTimeoutMs } from "./cursor-pi-tool-bridge-env.js";
+import {
+	CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV,
+	removeCursorExecutorBridgeDescriptor,
+	resolveCursorExecutorDescriptorDirectory,
+	resolveCursorExecutorIntegrationSlug,
+	resolveCursorPiToolTransport,
+	writeCursorExecutorBridgeDescriptor,
+} from "./cursor-executor-transport.js";
 import type {
 	CursorPiBridgeToolRequest,
 	CursorPiToolBridgeRun,
@@ -42,6 +51,45 @@ export interface CursorPiToolBridgeRunHost {
 
 const MCP_SERVER_VERSION = "0.1.0";
 
+interface McpProtocolSession {
+	server: McpProtocolServer;
+	transport: StreamableHTTPServerTransport;
+	activeRequestCount: number;
+}
+
+const EXECUTOR_MCP_MAX_SESSIONS = 8;
+const EXECUTOR_MCP_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
+
+class McpSessionLimitError extends Error {}
+
+class McpRequestBodyError extends Error {
+	constructor(
+		message: string,
+		readonly jsonRpcCode: number,
+	) {
+		super(message);
+	}
+}
+
+async function readJsonRequestBody(req: IncomingMessage): Promise<unknown> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of req) {
+		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+		size += buffer.length;
+		if (size > EXECUTOR_MCP_MAX_REQUEST_BYTES) {
+			throw new McpRequestBodyError("Cursor pi tool bridge request body exceeds 16 MiB", -32000);
+		}
+		chunks.push(buffer);
+	}
+	if (chunks.length === 0) return undefined;
+	try {
+		return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+	} catch {
+		throw new McpRequestBodyError("Parse error", -32700);
+	}
+}
+
 interface PendingBridgeCall {
 	request: CursorPiBridgeToolRequest;
 	resolve: (result: CallToolResult) => void;
@@ -63,6 +111,8 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 	private readonly endpointPath: string;
 	private readonly callTimeoutMs: number;
 	private readonly knownMcpToolNames: ReadonlySet<string>;
+	private readonly bridgeTransport: ReturnType<typeof resolveCursorPiToolTransport>;
+	private executorDescriptorPath?: string;
 	private readonly knownCursorMcpCallIds = new Set<string>();
 	private readonly queuedRequests: CursorPiBridgeToolRequest[] = [];
 	private readonly pendingByPiToolCallId = new Map<string, PendingBridgeCall>();
@@ -71,6 +121,7 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 	private onToolRequest?: (request: CursorPiBridgeToolRequest) => void;
 	private debugRecorder: CursorPiToolBridgeRunOptions["debugRecorder"];
 	private liveRunHandlerDetached = false;
+	private readonly mcpSessions = new Map<string, McpProtocolSession>();
 	private mcpServer?: McpProtocolServer;
 	private mcpTransport?: StreamableHTTPServerTransport;
 	private toolCallCounter = 0;
@@ -93,13 +144,31 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 		this.endpointPath = `${MCP_ENDPOINT_ROOT}/${randomUUID()}/mcp`;
 		this.callTimeoutMs = resolveCursorPiToolBridgeCallTimeoutMs(env);
 		this.knownMcpToolNames = new Set(snapshot.tools.map((tool) => tool.mcpToolName));
+		this.bridgeTransport = resolveCursorPiToolTransport(env);
 	}
 
 	async start(): Promise<void> {
 		if (!this.enabled) return;
-		await this.createMcpServer();
+		if (this.bridgeTransport === "mcp") await this.createSingleClientMcpServer();
 		const endpointUrl = await this.registry.registerRun(this.endpointPath, this);
 		this.mcpServers = { [MCP_SERVER_NAME]: { type: "http", url: endpointUrl } };
+		if (this.bridgeTransport !== "executor") return;
+		try {
+			const descriptorDirectory = resolveCursorExecutorDescriptorDirectory(this.env);
+			if (!descriptorDirectory) {
+				throw new Error(`${CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV} is required when PI_CURSOR_PI_TOOL_TRANSPORT=executor`);
+			}
+			this.executorDescriptorPath = await writeCursorExecutorBridgeDescriptor({
+				directory: descriptorDirectory,
+				runId: this.id,
+				endpointUrl,
+				integrationSlug: resolveCursorExecutorIntegrationSlug(this.env),
+				snapshot: this.snapshot,
+			});
+		} catch (error) {
+			await this.dispose().catch(() => undefined);
+			throw error;
+		}
 	}
 
 	emitStartDiagnostics(bridgeEnabled: boolean): void {
@@ -124,11 +193,16 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 	}
 
 	async handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		if (this.disposed || !this.mcpTransport) {
+		if (this.disposed) {
 			res.writeHead(410, { "content-type": "application/json" }).end(JSON.stringify({ error: "Cursor pi tool bridge run is disposed" }));
 			return;
 		}
-		await this.mcpTransport.handleRequest(req, res);
+		if (this.bridgeTransport === "mcp") {
+			if (!this.mcpTransport) throw new Error("Cursor pi tool bridge MCP transport is unavailable");
+			await this.mcpTransport.handleRequest(req, res);
+			return;
+		}
+		await this.handleReconnectableMcpRequest(req, res);
 	}
 
 	takeQueuedToolRequests(): CursorPiBridgeToolRequest[] {
@@ -232,36 +306,119 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 		this.disposed = true;
 		this.cancel("Cursor pi tool bridge run disposed");
 		await waitForProtocolFlush();
+		const sessions = [...this.mcpSessions.values()];
+		this.mcpSessions.clear();
 		await Promise.allSettled([
 			this.mcpTransport?.close(),
 			this.mcpServer?.close(),
+			...sessions.flatMap(({ transport, server }) => [transport.close(), server.close()]),
 		]);
 		await this.registry.unregisterRun(this.endpointPath, this);
+		if (this.executorDescriptorPath) {
+			await removeCursorExecutorBridgeDescriptor(this.executorDescriptorPath).catch(() => undefined);
+		}
 		this.emitDiagnostic({
 			event: "run_disposed",
 			...this.lifecycleDiagnosticFields(),
 		});
 	}
 
-	private async createMcpServer(): Promise<void> {
+	private async handleReconnectableMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		let body: unknown;
+		try {
+			body = req.method === "POST" ? await readJsonRequestBody(req) : undefined;
+		} catch (error) {
+			const requestError = error instanceof McpRequestBodyError ? error : new McpRequestBodyError("Parse error", -32700);
+			res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({
+				jsonrpc: "2.0",
+				error: { code: requestError.jsonRpcCode, message: requestError.message },
+				id: null,
+			}));
+			return;
+		}
+		const header = req.headers["mcp-session-id"];
+		const sessionId = Array.isArray(header) ? header[0] : header;
+		let session = sessionId ? this.mcpSessions.get(sessionId) : undefined;
+		if (session && sessionId) {
+			this.mcpSessions.delete(sessionId);
+			this.mcpSessions.set(sessionId, session);
+		}
+		if (!session && req.method === "POST" && isInitializeRequest(body)) {
+			try {
+				session = await this.createMcpSession();
+			} catch (error) {
+				if (!(error instanceof McpSessionLimitError)) throw error;
+				res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({
+					jsonrpc: "2.0",
+					error: { code: -32000, message: error.message },
+					id: null,
+				}));
+				return;
+			}
+		} else if (!session) {
+			res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({
+				jsonrpc: "2.0",
+				error: { code: -32000, message: "Bad Request: No valid MCP session ID provided" },
+				id: null,
+			}));
+			return;
+		}
+		session.activeRequestCount += 1;
+		try {
+			await session.transport.handleRequest(req, res, body);
+		} finally {
+			session.activeRequestCount -= 1;
+		}
+	}
+
+	private createProtocolServer(): McpProtocolServer {
 		const server = new McpProtocolServer(
 			{ name: "pi-cursor-sdk-tool-bridge", version: MCP_SERVER_VERSION },
 			{ capabilities: { tools: {} } },
 		);
-		const transport = new StreamableHTTPServerTransport({
-			sessionIdGenerator: randomUUID,
-		});
-
 		server.setRequestHandler(ListToolsRequestSchema, async () => ({
 			tools: this.snapshot.tools.map(snapshotToolToMcpTool),
 		}));
 		server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			return this.enqueueToolRequest(request.params.name, request.params.arguments, String(extra.requestId), extra.signal);
 		});
+		return server;
+	}
 
+	private async createSingleClientMcpServer(): Promise<void> {
+		const server = this.createProtocolServer();
+		const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
 		this.mcpServer = server;
 		this.mcpTransport = transport;
 		await server.connect(transport);
+	}
+
+	private async createMcpSession(): Promise<McpProtocolSession> {
+		if (this.mcpSessions.size >= EXECUTOR_MCP_MAX_SESSIONS) {
+			if (this.pendingByPiToolCallId.size > 0) {
+				throw new McpSessionLimitError("Cursor pi tool bridge MCP session limit reached while tool calls are pending");
+			}
+			const oldestIdle = [...this.mcpSessions.entries()].find(([, candidate]) => candidate.activeRequestCount === 0);
+			if (!oldestIdle) throw new McpSessionLimitError("Cursor pi tool bridge MCP session limit reached");
+			this.mcpSessions.delete(oldestIdle[0]);
+			await Promise.allSettled([oldestIdle[1].transport.close(), oldestIdle[1].server.close()]);
+		}
+		const server = this.createProtocolServer();
+		let session: McpProtocolSession;
+		const transport = new StreamableHTTPServerTransport({
+			sessionIdGenerator: randomUUID,
+			onsessioninitialized: (sessionId) => {
+				this.mcpSessions.set(sessionId, session);
+			},
+		});
+		session = { server, transport, activeRequestCount: 0 };
+		transport.onclose = () => {
+			const sessionId = transport.sessionId;
+			if (sessionId && this.mcpSessions.get(sessionId) === session) this.mcpSessions.delete(sessionId);
+		};
+
+		await server.connect(transport);
+		return session;
 	}
 
 	private enqueueToolRequest(mcpToolName: string, argsValue: unknown, cursorMcpCallId: string, signal?: AbortSignal): Promise<CallToolResult> {

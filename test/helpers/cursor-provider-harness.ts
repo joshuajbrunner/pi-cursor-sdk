@@ -371,6 +371,9 @@ export async function resetCursorProviderTestState(): Promise<void> {
 	delete process.env.PI_CURSOR_REGISTER_NATIVE_TOOLS;
 	delete process.env.PI_CURSOR_SETTING_SOURCES;
 	delete process.env.PI_CURSOR_PI_TOOL_BRIDGE;
+	delete process.env.PI_CURSOR_PI_TOOL_TRANSPORT;
+	delete process.env.PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR;
+	delete process.env.PI_CURSOR_EXECUTOR_INTEGRATION_SLUG;
 	delete process.env.PI_CURSOR_EXPOSE_BUILTIN_TOOLS;
 	delete process.env.PI_CURSOR_TASK_PRESENTATION;
 	delete process.env.PI_CURSOR_RUNTIME;

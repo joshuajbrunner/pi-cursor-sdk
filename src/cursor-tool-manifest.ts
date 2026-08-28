@@ -1,5 +1,6 @@
 import { parseEnvBoolean } from "./cursor-env-boolean.js";
 import type { CursorPiToolBridgeSnapshot } from "./cursor-pi-tool-bridge-types.js";
+import { resolveCursorPiToolTransport, type CursorPiToolTransport } from "./cursor-executor-transport.js";
 
 export const CURSOR_TOOL_MANIFEST_ENV = "PI_CURSOR_TOOL_MANIFEST";
 
@@ -21,9 +22,11 @@ export function buildCursorToolManifestText(options: {
 	/** When false, bridge is off via PI_CURSOR_PI_TOOL_BRIDGE=0 (not merely empty). */
 	piBridgeEnabled?: boolean;
 	includePiBridgeGuidance?: boolean;
+	transport?: CursorPiToolTransport;
 } = {}): string {
 	const piBridgeEnabled = options.piBridgeEnabled ?? true;
 	const includePiBridgeGuidance = options.includePiBridgeGuidance !== false;
+	const transport = options.transport ?? resolveCursorPiToolTransport();
 	const lines = [
 		"Callable tool surfaces this run:",
 		`- Cursor host/MCP: ${CURSOR_HOST_TOOL_MANIFEST_SUMMARY}; configured MCP depends on Cursor settings.`,
@@ -35,9 +38,14 @@ export function buildCursorToolManifestText(options: {
 			lines.push("- Pi bridge: disabled (PI_CURSOR_PI_TOOL_BRIDGE=0).");
 		} else if (bridgeTools.length === 0) {
 			lines.push("- Pi bridge: no pi__* tools exposed this run.");
+		} else if (transport === "executor") {
+			const piToolNames = [...bridgeTools.map((tool) => tool.piToolName)].sort().join(", ");
+			lines.push(`- Pi bridge: real pi tools available through the Executor CLI, not Cursor MCP (${piToolNames}).`);
+			lines.push(`- Find a Pi tool path with Cursor Shell: executor tools search '<real pi tool name>'`);
+			lines.push(`- Call the exact path returned by search: executor call <returned path> '<JSON arguments>'`);
 		} else {
-			const names = [...bridgeTools.map((tool) => tool.mcpToolName)].sort().join(", ");
-			lines.push(`- Pi bridge: call exposed pi__* MCP names (${names}); pi shows real pi names.`);
+			const mcpToolNames = [...bridgeTools.map((tool) => tool.mcpToolName)].sort().join(", ");
+			lines.push(`- Pi bridge: call exposed pi__* MCP names (${mcpToolNames}); pi shows real pi names.`);
 		}
 	}
 	lines.push("- Not callable: cursor-replay-* IDs, pi history names, transcript labels.");

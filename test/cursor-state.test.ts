@@ -747,6 +747,23 @@ describe("Cursor runtime state", () => {
 		expect(report).toContain("Callable tool surfaces this run:");
 	});
 
+	it("formatCursorToolsDebugReport reports Executor transport settings", () => {
+		const pi = createPiHarness({
+			activeTools: ["intercom"],
+			initialTools: [createTestToolInfo("intercom")],
+		});
+		const report = formatCursorToolsDebugReport(pi, {
+			PI_CURSOR_PI_TOOL_TRANSPORT: "executor",
+			PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR: "/tmp/private",
+			PI_CURSOR_EXECUTOR_INTEGRATION_SLUG: "pi-workspace",
+		});
+		expect(report).toContain("PI_CURSOR_PI_TOOL_TRANSPORT: executor");
+		expect(report).toContain("Executor CLI, not Cursor MCP");
+		expect(report).toContain("Suggested Executor integration slug: pi-workspace");
+		expect(report).toContain("executor tools search '<real pi tool name>'");
+		expect(report).toContain("PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR: /tmp/private");
+	});
+
 	it("formatCursorToolsDebugReport notes disabled manifest", () => {
 		const pi = createPiHarness();
 		const report = formatCursorToolsDebugReport(pi, {

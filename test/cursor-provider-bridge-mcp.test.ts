@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Type } from "typebox";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import {
 	resetCursorProviderTestState,
 	mockedCreate,
@@ -40,7 +41,7 @@ import { __testUtils as sessionAgentTestUtils } from "../src/cursor-session-agen
 import { __testUtils as cursorPiToolBridgeTestUtils } from "../src/cursor-pi-tool-bridge.js";
 import { __testUtils as nativeToolDisplayTestUtils } from "../src/cursor-native-tool-display-state.js";
 import type { Context } from "@earendil-works/pi-ai";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { convertPiContentToMcpContent } from "../src/cursor-pi-tool-bridge-mcp.js";
@@ -234,6 +235,86 @@ describe("streamCursor bridge MCP", () => {
 	});
 
 
+	it("keeps the bridge live for Executor while omitting it from Agent.create", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-cursor-executor-provider-test-"));
+		process.env.PI_CURSOR_PI_TOOL_TRANSPORT = "executor";
+		process.env.PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR = directory;
+		process.env.PI_CURSOR_EXECUTOR_INTEGRATION_SLUG = "pi-workspace";
+		registerBridgeForProviderTest({
+			active: ["intercom"],
+			tools: [createTestToolInfo("intercom", Type.Object({ action: Type.String() }), "Message another pi session")],
+		});
+		const mockSend = vi.fn().mockResolvedValue({
+			id: "run-1",
+			agentId: "agent-1",
+			status: "finished",
+			wait: vi.fn().mockResolvedValue({ id: "run-1", status: "finished", result: "ok" }),
+			cancel: vi.fn(),
+			supports: () => true,
+			unsupportedReason: () => undefined,
+		});
+		mockCreatedAgent({
+			agentId: "agent-1",
+			send: mockSend,
+			[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+		});
+
+		try {
+			await collectEvents(streamCursor(makeModel("composer-2"), makeContext(), { apiKey: "test-key" }));
+
+			expect(getCreatedAgentOptions().mcpServers).toBeUndefined();
+			const descriptorFiles = readdirSync(directory).filter((name) => name.endsWith(".json"));
+			expect(descriptorFiles).toHaveLength(1);
+			const descriptorPath = join(directory, descriptorFiles[0]!);
+			const descriptor = JSON.parse(readFileSync(descriptorPath, "utf8")) as {
+				endpointUrl: string;
+				integrationSlug: string;
+				tools: Array<{ mcpToolName: string }>;
+			};
+			expect(descriptor.integrationSlug).toBe("pi-workspace");
+			expect(descriptor.tools).toEqual([{ piToolName: "intercom", mcpToolName: "pi__intercom" }]);
+			const identityResponse = await fetch(descriptor.endpointUrl);
+			expect(identityResponse.status).toBe(400);
+			expect(await identityResponse.json()).toMatchObject({
+				jsonrpc: "2.0",
+				error: { code: -32000, message: "Bad Request: No valid MCP session ID provided" },
+				id: null,
+			});
+			const malformedResponse = await fetch(descriptor.endpointUrl, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: "{",
+			});
+			expect(malformedResponse.status).toBe(400);
+			expect(await malformedResponse.json()).toMatchObject({
+				jsonrpc: "2.0",
+				error: { code: -32700, message: "Parse error" },
+				id: null,
+			});
+			const { client, transport } = await connectMcpClient(descriptor.endpointUrl);
+			try {
+				const listed = await client.listTools();
+				expect(listed.tools.map((tool) => tool.name)).toEqual(["pi__intercom"]);
+			} finally {
+				await client.close();
+				await transport.close();
+			}
+			const reconnected = await connectMcpClient(descriptor.endpointUrl);
+			try {
+				const listed = await reconnected.client.listTools();
+				expect(listed.tools.map((tool) => tool.name)).toEqual(["pi__intercom"]);
+			} finally {
+				await reconnected.client.close();
+				await reconnected.transport.close();
+			}
+		} finally {
+			await cursorProviderTestUtils.resetSessionCursorAgents();
+			await cursorPiToolBridgeTestUtils.resetRegisteredBridgeForTests();
+			expect(readdirSync(directory).filter((name) => name.endsWith(".json"))).toEqual([]);
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("omits overlapping pi built-ins from Agent.create by default and exposes them with explicit opt-in", async () => {
 		registerBridgeForProviderTest({
 			active: ["read", "bash"],
@@ -325,7 +406,14 @@ describe("streamCursor bridge MCP", () => {
 		expect(getCreatedAgentOptions().mcpServers).toBeUndefined();
 	});
 
-	it("emits bridge MCP requests as real pi tool calls and resumes the same Cursor run after tool results in plan mode", async () => {
+	it.each(["mcp", "executor"] as const)(
+		"emits %s bridge requests as real pi tool calls and resumes the same Cursor run after tool results",
+		async (transportMode) => {
+		const descriptorDirectory = mkdtempSync(join(tmpdir(), "pi-cursor-executor-lifecycle-test-"));
+		if (transportMode === "executor") {
+			process.env.PI_CURSOR_PI_TOOL_TRANSPORT = "executor";
+			process.env.PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR = descriptorDirectory;
+		}
 		await setCursorModeForBridgeTest("plan");
 		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "1";
 		process.env.PI_CURSOR_EXPOSE_BUILTIN_TOOLS = "1";
@@ -370,7 +458,15 @@ describe("streamCursor bridge MCP", () => {
 		const firstEventsPromise = collectEvents(streamCursor(makeModel("composer-2"), makeContext(), { apiKey: "test-key" }));
 		await vi.waitFor(() => expect(mockSend).toHaveBeenCalled());
 		const createOptions = getCreatedAgentOptions();
-		const { client, transport } = await connectMcpClient(getPiToolsMcpUrlFromAgentCreateOptions(createOptions));
+		const descriptorName = transportMode === "executor"
+			? readdirSync(descriptorDirectory).find((name) => name.endsWith(".json"))
+			: undefined;
+		if (transportMode === "executor") expect(descriptorName).toBeDefined();
+		const bridgeUrl = transportMode === "executor"
+			? (JSON.parse(readFileSync(join(descriptorDirectory, descriptorName!), "utf8")) as { endpointUrl: string }).endpointUrl
+			: getPiToolsMcpUrlFromAgentCreateOptions(createOptions);
+		if (transportMode === "executor") expect(createOptions.mcpServers).toBeUndefined();
+		const { client, transport } = await connectMcpClient(bridgeUrl);
 		try {
 			const readCallPromise = client.callTool({ name: "pi__read", arguments: { path: "README.md" } });
 			const bashCallPromise = client.callTool({ name: "pi__bash", arguments: { command: "pwd" } });
@@ -415,6 +511,45 @@ describe("streamCursor bridge MCP", () => {
 			expect(trace).not.toContain("Cursor MCP did not complete");
 			expect(trace).not.toContain("Cursor tool started without a completion event");
 			expect(nativeToolDisplayTestUtils.nativeToolResultCount()).toBe(0);
+
+			if (transportMode === "executor") {
+				const extraSessionIds: string[] = [];
+				const initialize = () => fetch(bridgeUrl, {
+					method: "POST",
+					headers: {
+						accept: "application/json, text/event-stream",
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						jsonrpc: "2.0",
+						id: `extra-${extraSessionIds.length}`,
+						method: "initialize",
+						params: {
+							protocolVersion: LATEST_PROTOCOL_VERSION,
+							capabilities: {},
+							clientInfo: { name: "session-cap-test", version: "1.0.0" },
+						},
+					}),
+				});
+				for (let index = 0; index < 7; index += 1) {
+					const response = await initialize();
+					expect(response.status).toBe(200);
+					const sessionId = response.headers.get("mcp-session-id");
+					expect(sessionId).toBeTruthy();
+					extraSessionIds.push(sessionId!);
+				}
+				const limited = await initialize();
+				expect(limited.status).toBe(503);
+				expect(await limited.json()).toMatchObject({
+					jsonrpc: "2.0",
+					error: { code: -32000, message: expect.stringContaining("while tool calls are pending") },
+					id: null,
+				});
+				await Promise.all(extraSessionIds.map((sessionId) => fetch(bridgeUrl, {
+					method: "DELETE",
+					headers: { "mcp-session-id": sessionId },
+				})));
+			}
 
 			const readToolResultMessage = {
 				role: "toolResult" as const,
@@ -464,6 +599,9 @@ describe("streamCursor bridge MCP", () => {
 		} finally {
 			await client.close().catch(() => undefined);
 			await transport.close().catch(() => undefined);
+			await cursorProviderTestUtils.resetSessionCursorAgents();
+			await cursorPiToolBridgeTestUtils.resetRegisteredBridgeForTests();
+			rmSync(descriptorDirectory, { recursive: true, force: true });
 		}
 	});
 

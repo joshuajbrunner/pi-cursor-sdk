@@ -11,6 +11,11 @@ import {
 	CURSOR_PI_TOOL_BRIDGE_ENV,
 } from "./cursor-pi-tool-bridge-env.js";
 import { bridgeToolExecutionAbortTracker } from "./cursor-pi-tool-bridge-abort.js";
+import {
+	CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV,
+	CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV,
+	CURSOR_PI_TOOL_TRANSPORT_ENV,
+} from "./cursor-executor-transport.js";
 import { isCursorPiBridgeToolCallId, MCP_SERVER_NAME } from "./cursor-pi-tool-bridge-constants.js";
 import { LOOPBACK_HOST, CursorPiToolBridgeRegistry } from "./cursor-pi-tool-bridge-server.js";
 import type {
@@ -33,6 +38,16 @@ export type {
 } from "./cursor-pi-tool-bridge-types.js";
 export type { CursorPiToolBridgeDiagnosticEvent } from "./cursor-pi-tool-bridge-diagnostics.js";
 export { resolveCursorPiToolBridgeDebugEnabled } from "./cursor-pi-tool-bridge-diagnostics.js";
+export {
+	CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV,
+	CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV,
+	CURSOR_PI_TOOL_TRANSPORT_ENV,
+	getCurrentCursorExecutorDescriptorPath,
+	resolveCursorExecutorDescriptorDirectory,
+	resolveCursorExecutorIntegrationSlug,
+	resolveCursorPiToolTransport,
+	type CursorPiToolTransport,
+} from "./cursor-executor-transport.js";
 export {
 	CURSOR_PI_TOOL_BRIDGE_BUILTINS_ENV,
 	CURSOR_PI_TOOL_BRIDGE_CALL_TIMEOUT_MS_ENV,
@@ -132,6 +147,9 @@ export function getRegisteredCursorPiToolBridge(): CursorPiToolBridge | undefine
 export const __testUtils = {
 	CURSOR_PI_TOOL_BRIDGE_ENV,
 	CURSOR_PI_TOOL_BRIDGE_BUILTINS_ENV,
+	CURSOR_PI_TOOL_TRANSPORT_ENV,
+	CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV,
+	CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV,
 	CURSOR_PI_TOOL_BRIDGE_CALL_TIMEOUT_MS_ENV,
 	CURSOR_PI_TOOL_BRIDGE_DEBUG_ENV,
 	CURSOR_PI_TOOL_BRIDGE_DIAGNOSTIC_PREFIX,

@@ -7,6 +7,14 @@ import {
 } from "./cursor-tool-manifest.js";
 import { runCursorSessionAgentCleanupCommand } from "./cursor-session-agent-cleanup.js";
 import {
+	CURSOR_PI_TOOL_TRANSPORT_ENV,
+	CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV,
+	getCurrentCursorExecutorDescriptorPath,
+	resolveCursorExecutorDescriptorDirectory,
+	resolveCursorExecutorIntegrationSlug,
+	resolveCursorPiToolTransport,
+} from "./cursor-executor-transport.js";
+import {
 	CURSOR_HTTP1_ENTRY_TYPE,
 	getStoredCursorHttp1Enabled,
 	isCursorHttp1EntryData,
@@ -382,12 +390,21 @@ export function formatCursorToolsDebugReport(
 ): string {
 	const bridgeEnabled = resolveCursorPiToolBridgeEnabled(env);
 	const manifestEnabled = resolveCursorToolManifestEnabled(env);
+	const transport = resolveCursorPiToolTransport(env);
 	const lines = [
 		"Cursor tool surfaces (current session):",
 		`${CURSOR_PI_TOOL_BRIDGE_ENV}: ${bridgeEnabled ? "enabled" : "disabled"}`,
+		`${CURSOR_PI_TOOL_TRANSPORT_ENV}: ${transport}`,
 		`${CURSOR_TOOL_MANIFEST_ENV}: ${manifestEnabled ? "enabled" : "disabled"}`,
 		`${CURSOR_SETTING_SOURCES_ENV}: ${formatEffectiveCursorSettingSourcesLabel(env[CURSOR_SETTING_SOURCES_ENV])}`,
 	];
+	if (transport === "executor") {
+		const descriptorDirectory = resolveCursorExecutorDescriptorDirectory(env);
+		lines.push(`${CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV}: ${descriptorDirectory ?? "(unset)"}`);
+		lines.push(`Suggested Executor integration slug: ${resolveCursorExecutorIntegrationSlug(env)}`);
+		const currentDescriptorPath = getCurrentCursorExecutorDescriptorPath();
+		if (currentDescriptorPath) lines.push(`Current Executor bridge descriptor: ${currentDescriptorPath}`);
+	}
 
 	let bridgeSnapshot;
 	if (bridgeEnabled) {
@@ -398,7 +415,11 @@ export function formatCursorToolsDebugReport(
 		}
 	}
 
-	lines.push(buildCursorToolManifestText({ bridgeSnapshot, piBridgeEnabled: bridgeEnabled }));
+	lines.push(buildCursorToolManifestText({
+		bridgeSnapshot,
+		piBridgeEnabled: bridgeEnabled,
+		transport,
+	}));
 	return lines.join("\n");
 }
 
