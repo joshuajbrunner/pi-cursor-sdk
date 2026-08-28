@@ -108,8 +108,21 @@ The command saves the following setting while preserving other config fields, cr
 {
   "local": {
     "piToolBridge": {
+      "transport": "executor"
+    }
+  }
+}
+```
+
+The nested `executor` object is optional. Add it manually only to override the defaults:
+
+```json
+{
+  "local": {
+    "piToolBridge": {
       "transport": "executor",
       "executor": {
+        "descriptorDirectory": "/absolute/path/to/executor-bridges",
         "integrationSlug": "pi"
       }
     }
