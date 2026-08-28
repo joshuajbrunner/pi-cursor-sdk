@@ -105,6 +105,7 @@
     "README.md",
     "docs/cursor-model-ux-spec.md",
     "docs/cursor-tool-surfaces.md",
+    "docs/executor-transport.md",
     "docs/cursor-live-smoke-checklist.md",
     "docs/cursor-testing-lessons.md",
     "docs/cursor-dogfood-checklist.md",
