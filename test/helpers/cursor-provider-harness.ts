@@ -143,9 +143,13 @@ export function textFromToolResultBlock(block: TextContent | ImageContent | unde
 	return block?.type === "text" ? block.text : "";
 }
 
-export function registerBridgeForProviderTest(options: { active: string[]; tools: ToolInfo[] }) {
+export function registerBridgeForProviderTest(options: {
+	active: string[];
+	tools: ToolInfo[];
+	userConfig?: import("../../src/cursor-config.js").CursorSdkConfig;
+}) {
 	const pi = createBridgePiHarness(options);
-	registerCursorPiToolBridge(pi);
+	registerCursorPiToolBridge(pi, { env: process.env, userConfig: options.userConfig ?? {} });
 	return { pi, runSessionShutdown: pi.runSessionShutdown.bind(pi) };
 }
 

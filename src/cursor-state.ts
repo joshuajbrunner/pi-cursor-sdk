@@ -1,18 +1,19 @@
 import type { AgentModeOption } from "@cursor/sdk";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
 	buildCursorToolManifestText,
 	CURSOR_TOOL_MANIFEST_ENV,
 	resolveCursorToolManifestEnabled,
 } from "./cursor-tool-manifest.js";
 import { runCursorSessionAgentCleanupCommand } from "./cursor-session-agent-cleanup.js";
+import { getRegisteredCursorPiToolBridge } from "./cursor-pi-tool-bridge.js";
 import {
 	CURSOR_PI_TOOL_TRANSPORT_ENV,
 	CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV,
 	getCurrentCursorExecutorDescriptorPath,
-	resolveCursorExecutorDescriptorDirectory,
-	resolveCursorExecutorIntegrationSlug,
-	resolveCursorPiToolTransport,
+	prepareCursorExecutorDescriptorDirectory,
+	resolveCursorExecutorTransportSettings,
+	type CursorPiToolTransport,
 } from "./cursor-executor-transport.js";
 import {
 	CURSOR_HTTP1_ENTRY_TYPE,
@@ -36,15 +37,17 @@ import { isCursorModel } from "./cursor-model.js";
 import { registerCursorModelLifecycle } from "./cursor-model-lifecycle.js";
 import { asRecord } from "./cursor-record-utils.js";
 import { getCursorSessionScopeKey } from "./cursor-session-scope.js";
-import { refreshSessionCursorAgentConfig } from "./cursor-session-agent.js";
+import { refreshSessionCursorAgentConfig, resetSessionCursorAgent } from "./cursor-session-agent.js";
 import { getCursorModelMetadata } from "./model-discovery.js";
 import {
 	cursorFastDefaultsFromConfig,
 	getCursorSdkUserConfigPath,
 	loadCursorSdkUserConfig,
+	mergeCursorSdkConfig,
 	mergeCursorSdkConfigForUpdate,
 	resolveCursorFastDefault,
 	updateCursorSdkConfig,
+	type CursorSdkConfig,
 } from "./cursor-config.js";
 import {
 	consumeCursorLocalForceOverride,
@@ -146,6 +149,16 @@ function saveGlobalFastPreference(modelId: string, fast: boolean): void {
 				),
 			};
 		},
+		{ newFileMode: 0o600 },
+	);
+}
+
+function saveGlobalCursorExecutorTransport(transport: CursorPiToolTransport): void {
+	updateCursorSdkConfig(
+		getConfigPath(),
+		(current) => mergeCursorSdkConfigForUpdate(current, {
+			local: { piToolBridge: { transport } },
+		}),
 		{ newFileMode: 0o600 },
 	);
 }
@@ -387,21 +400,34 @@ function formatEffectiveCursorSettingSourcesLabel(raw: string | undefined = proc
 export function formatCursorToolsDebugReport(
 	pi: Pick<ExtensionAPI, "getActiveTools" | "getAllTools">,
 	env: Record<string, string | undefined> = process.env,
+	userConfig?: CursorSdkConfig,
 ): string {
 	const bridgeEnabled = resolveCursorPiToolBridgeEnabled(env);
 	const manifestEnabled = resolveCursorToolManifestEnabled(env);
-	const transport = resolveCursorPiToolTransport(env);
+	const registeredBridge = getRegisteredCursorPiToolBridge();
+	const executorSettings = userConfig || env !== process.env
+		? resolveCursorExecutorTransportSettings({ env, userConfig: userConfig ?? {} })
+		: registeredBridge?.getTransportSettings() ?? resolveCursorExecutorTransportSettings({
+			env,
+			userConfig: loadCursorSdkUserConfig(),
+			agentDir: getAgentDir(),
+		});
+	const transport = executorSettings.transport;
+	const liveTransport = registeredBridge?.getLiveTransport();
 	const lines = [
 		"Cursor tool surfaces (current session):",
 		`${CURSOR_PI_TOOL_BRIDGE_ENV}: ${bridgeEnabled ? "enabled" : "disabled"}`,
-		`${CURSOR_PI_TOOL_TRANSPORT_ENV}: ${transport}`,
+		`${CURSOR_PI_TOOL_TRANSPORT_ENV}: ${transport} (source: ${executorSettings.sources.transport})`,
+		`Most recent live Pi tool transport: ${liveTransport ?? "(no live bridge run)"}`,
 		`${CURSOR_TOOL_MANIFEST_ENV}: ${manifestEnabled ? "enabled" : "disabled"}`,
 		`${CURSOR_SETTING_SOURCES_ENV}: ${formatEffectiveCursorSettingSourcesLabel(env[CURSOR_SETTING_SOURCES_ENV])}`,
 	];
 	if (transport === "executor") {
-		const descriptorDirectory = resolveCursorExecutorDescriptorDirectory(env);
-		lines.push(`${CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV}: ${descriptorDirectory ?? "(unset)"}`);
-		lines.push(`Suggested Executor integration slug: ${resolveCursorExecutorIntegrationSlug(env)}`);
+		lines.push(`${CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV}: ${executorSettings.descriptorDirectory} (source: ${executorSettings.sources.descriptorDirectory})`);
+		if (executorSettings.descriptorDirectoryError) {
+			lines.push(`Executor descriptor configuration error: ${executorSettings.descriptorDirectoryError}`);
+		}
+		lines.push(`Suggested Executor integration slug: ${executorSettings.integrationSlug} (source: ${executorSettings.sources.integrationSlug})`);
 		const currentDescriptorPath = getCurrentCursorExecutorDescriptorPath();
 		if (currentDescriptorPath) lines.push(`Current Executor bridge descriptor: ${currentDescriptorPath}`);
 	}
@@ -513,6 +539,79 @@ export function registerCursorRuntimeControls(pi: CursorRuntimeControlsExtension
 		description: "Show live Cursor tool surfaces for this session (maintainer debug)",
 		handler: async (_args, ctx) => {
 			emitCursorToolsDebugReport(pi, ctx);
+		},
+	});
+
+	pi.registerCommand("cursor-executor", {
+		description: "Show or save the user-level Pi tool transport",
+		handler: async (args, ctx) => {
+			const usage = "Usage: /cursor-executor [on|off]";
+			const normalized = args.trim().toLowerCase();
+			const registeredBridge = getRegisteredCursorPiToolBridge();
+			const current = registeredBridge?.getTransportSettings() ?? resolveCursorExecutorTransportSettings({
+				userConfig: loadCursorSdkUserConfig(),
+				agentDir: getAgentDir(),
+			});
+			if (!normalized) {
+				const liveTransport = getRegisteredCursorPiToolBridge()?.getLiveTransport() ?? "none";
+				ctx.ui.notify(
+					`Executor transport is ${current.transport === "executor" ? "enabled" : "disabled"} (source: ${current.sources.transport}); most recent live transport: ${liveTransport}; config: ${getConfigPath()}; descriptor directory: ${current.descriptorDirectory}${current.descriptorDirectoryError ? `; configuration error: ${current.descriptorDirectoryError}` : ""}. ${usage}`,
+					"info",
+				);
+				return;
+			}
+			const transport = normalized === "on"
+				? "executor"
+				: normalized === "off"
+					? "mcp"
+					: undefined;
+			if (!transport) {
+				ctx.ui.notify(`Invalid Executor transport mode "${args.trim()}". ${usage}`, "error");
+				return;
+			}
+			try {
+				if (transport === "executor") {
+					const candidateConfig = mergeCursorSdkConfig(loadCursorSdkUserConfig(), {
+						local: { piToolBridge: { transport } },
+					});
+					const candidate = resolveCursorExecutorTransportSettings({
+						userConfig: candidateConfig,
+						agentDir: getAgentDir(),
+					});
+					await prepareCursorExecutorDescriptorDirectory(candidate.descriptorDirectory);
+				}
+				saveGlobalCursorExecutorTransport(transport);
+				registeredBridge?.reloadTransportSettings();
+			} catch (error) {
+				ctx.ui.notify(
+					`Failed to save Executor transport: ${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
+				return;
+			}
+			try {
+				await resetSessionCursorAgent();
+			} catch (error) {
+				ctx.ui.notify(
+					`Executor transport was saved, but the current Cursor agent could not be reset: ${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
+				return;
+			}
+			const effective = registeredBridge?.getTransportSettings() ?? resolveCursorExecutorTransportSettings({
+				userConfig: loadCursorSdkUserConfig(),
+				agentDir: getAgentDir(),
+			});
+			const environmentOverride = effective.sources.transport === "environment"
+				? ` Environment override keeps the effective transport ${effective.transport}.`
+				: "";
+			const executorWarning = transport === "executor"
+				? " Attended use only; register the new descriptor in Executor after the next Cursor run."
+				: "";
+			ctx.ui.notify(
+				`Saved user Pi tool transport ${transport} in ${getConfigPath()}.${environmentOverride}${executorWarning}`,
+				transport === "executor" ? "warning" : "info",
+			);
 		},
 	});
 

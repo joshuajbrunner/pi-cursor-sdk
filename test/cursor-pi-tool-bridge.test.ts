@@ -123,6 +123,35 @@ describe("cursor pi tool bridge flags and snapshots", () => {
 		expect(resolveCursorPiToolBridgeDebugEnabled({ PI_CURSOR_PI_TOOL_BRIDGE_DEBUG: "true" })).toBe(true);
 	});
 
+	it("caches user transport settings until an explicit reload", () => {
+		const userConfig: import("../src/cursor-config.js").CursorSdkConfig = {
+			local: {
+				piToolBridge: {
+					transport: "executor",
+					executor: { descriptorDirectory: "relative/bridges" },
+				},
+			},
+		};
+		const registry = __testUtils.createRegistry(createBridgePiHarness({ active: [], tools: [] }), {}, userConfig);
+		expect(registry.getTransport()).toBe("executor");
+		expect(registry.getTransportSettings().descriptorDirectoryError).toContain("must be absolute");
+		expect(() => registry.getTransportConfigurationSignature()).not.toThrow();
+
+		userConfig.local!.piToolBridge!.transport = "mcp";
+		expect(registry.getTransport()).toBe("executor");
+		expect(registry.reloadTransportSettings().transport).toBe("mcp");
+
+		const injectedAgentDirRegistry = __testUtils.createRegistry(
+			createBridgePiHarness({ active: [], tools: [] }),
+			{},
+			{ local: { piToolBridge: { transport: "executor" } } },
+			"/tmp/injected-pi-agent",
+		);
+		expect(injectedAgentDirRegistry.getTransportSettings().descriptorDirectory).toBe(
+			"/tmp/injected-pi-agent/cursor-executor-bridges",
+		);
+	});
+
 	it("maps only active pi tools, includes dynamic tools, and excludes only registered internal Cursor replay names", () => {
 		const readParameters = Type.Object({ path: Type.String({ description: "Path to read" }) });
 		const dynamicParameters = Type.Object({ target: Type.String() });

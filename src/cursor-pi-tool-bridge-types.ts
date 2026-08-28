@@ -1,7 +1,7 @@
 import type { McpServerConfig } from "@cursor/sdk";
 import type { Context, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { CursorSdkEventDebugRecorder } from "./cursor-sdk-event-debug.js";
-import type { CursorPiToolTransport } from "./cursor-executor-transport.js";
+import type { CursorExecutorTransportSettings, CursorPiToolTransport } from "./cursor-executor-transport.js";
 import type {
 	ExtensionAPI,
 	ExtensionHandler,
@@ -59,6 +59,7 @@ export interface CursorPiBridgeToolRequest {
 export interface CursorPiToolBridgeRun {
 	id: string;
 	enabled: boolean;
+	transport: CursorPiToolTransport;
 	mcpServers?: Record<string, McpServerConfig>;
 	snapshot: CursorPiToolBridgeSnapshot;
 	takeQueuedToolRequests(): CursorPiBridgeToolRequest[];
@@ -75,6 +76,10 @@ export interface CursorPiToolBridgeRun {
 export interface CursorPiToolBridge {
 	isEnabled(): boolean;
 	getTransport(): CursorPiToolTransport;
+	getTransportSettings(): CursorExecutorTransportSettings;
+	reloadTransportSettings(): CursorExecutorTransportSettings;
+	getTransportConfigurationSignature(): string;
+	getLiveTransport(): CursorPiToolTransport | undefined;
 	getToolSurfaceSignature(): string;
 	createRun(options?: CursorPiToolBridgeRunOptions): Promise<CursorPiToolBridgeRun>;
 	disposeAll(reason?: string): Promise<void>;

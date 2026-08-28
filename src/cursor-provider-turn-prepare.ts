@@ -307,6 +307,7 @@ async function prepareCursorLocalProviderTurn(
 				toolManifest: buildCursorToolManifestText({
 					bridgeSnapshot: sessionAgentLease.bridgeRun?.snapshot,
 					piBridgeEnabled: resolveCursorPiToolBridgeEnabled(),
+					transport: sessionAgentLease.bridgeRun?.transport,
 					includePiBridgeGuidance,
 				}),
 			};

@@ -237,12 +237,17 @@ describe("streamCursor bridge MCP", () => {
 
 	it("keeps the bridge live for Executor while omitting it from Agent.create", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-cursor-executor-provider-test-"));
-		process.env.PI_CURSOR_PI_TOOL_TRANSPORT = "executor";
-		process.env.PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR = directory;
-		process.env.PI_CURSOR_EXECUTOR_INTEGRATION_SLUG = "pi-workspace";
 		registerBridgeForProviderTest({
 			active: ["intercom"],
 			tools: [createTestToolInfo("intercom", Type.Object({ action: Type.String() }), "Message another pi session")],
+			userConfig: {
+				local: {
+					piToolBridge: {
+						transport: "executor",
+						executor: { descriptorDirectory: directory, integrationSlug: "pi-workspace" },
+					},
+				},
+			},
 		});
 		const mockSend = vi.fn().mockResolvedValue({
 			id: "run-1",

@@ -165,6 +165,34 @@ describe("Cursor SDK config resolver", () => {
 		expect(resolved.cloud.skipReviewerRequest).toMatchObject({ value: false, source: "user" });
 	});
 
+	it("loads Pi tool transport only from user config and strips it from trusted project config", () => {
+		const userPath = getCursorSdkUserConfigPath(agentDir);
+		const projectPath = getCursorSdkProjectConfigPath(cwd);
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(join(cwd, ".pi"), { recursive: true });
+		const bridge = {
+			transport: "executor",
+			executor: { descriptorDirectory: "/tmp/user-bridges", integrationSlug: "user-pi" },
+		};
+		writeFileSync(userPath, JSON.stringify({ local: { piToolBridge: bridge } }));
+		writeFileSync(projectPath, JSON.stringify({ local: { piToolBridge: bridge, autoReview: true } }));
+
+		const loaded = loadCursorSdkConfig({ agentDir, cwd, projectTrusted: true });
+		expect(loaded.user.local?.piToolBridge).toEqual(bridge);
+		expect(loaded.project?.local).toEqual({ autoReview: true });
+	});
+
+	it("deep-merges Pi tool bridge updates without removing existing Executor fields", () => {
+		const merged = mergeCursorSdkConfig(
+			{ local: { piToolBridge: { transport: "mcp", executor: { integrationSlug: "custom" } } } },
+			{ local: { piToolBridge: { transport: "executor" } } },
+		);
+		expect(merged.local?.piToolBridge).toEqual({
+			transport: "executor",
+			executor: { integrationSlug: "custom" },
+		});
+	});
+
 	it("keeps legacy fastDefaults shape compatible and writes user config as 0600", () => {
 		const path = getCursorSdkUserConfigPath(agentDir);
 		mkdirSync(agentDir, { recursive: true });

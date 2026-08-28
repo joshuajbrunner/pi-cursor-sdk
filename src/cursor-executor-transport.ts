@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
 import { unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
+import type { CursorSdkConfig } from "./cursor-config.js";
 import type { CursorPiToolBridgeSnapshot } from "./cursor-pi-tool-bridge-types.js";
 
 export const CURSOR_PI_TOOL_TRANSPORT_ENV = "PI_CURSOR_PI_TOOL_TRANSPORT";
@@ -9,6 +11,25 @@ export const CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV = "PI_CURSOR_EXECUTOR_DESCRIPTOR
 export const CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV = "PI_CURSOR_EXECUTOR_INTEGRATION_SLUG";
 
 export type CursorPiToolTransport = "mcp" | "executor";
+export type CursorExecutorSettingSource = "environment" | "user" | "builtin";
+
+export interface CursorExecutorTransportSettings {
+	transport: CursorPiToolTransport;
+	descriptorDirectory: string;
+	integrationSlug: string;
+	descriptorDirectoryError?: string;
+	sources: {
+		transport: CursorExecutorSettingSource;
+		descriptorDirectory: CursorExecutorSettingSource;
+		integrationSlug: CursorExecutorSettingSource;
+	};
+}
+
+export interface ResolveCursorExecutorTransportSettingsOptions {
+	env?: Record<string, string | undefined>;
+	userConfig?: CursorSdkConfig;
+	agentDir?: string;
+}
 
 export interface CursorExecutorBridgeDescriptor {
 	version: 1;
@@ -43,6 +64,79 @@ export function resolveCursorExecutorIntegrationSlug(
 	env: Record<string, string | undefined> = process.env,
 ): string {
 	return env[CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV]?.trim() || "pi";
+}
+
+function hasNonEmptyEnvironmentValue(env: Record<string, string | undefined>, name: string): boolean {
+	return Boolean(env[name]?.trim());
+}
+
+// Production callers inject pi's canonical getAgentDir() result. This fallback keeps
+// host-independent tests and embedders usable without importing the pi runtime.
+export function getDefaultCursorAgentDirectory(
+	env: Record<string, string | undefined> = process.env,
+): string {
+	return env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
+}
+
+export function getDefaultCursorExecutorDescriptorDirectory(
+	agentDir = getDefaultCursorAgentDirectory(),
+): string {
+	return join(agentDir, "cursor-executor-bridges");
+}
+
+export function resolveCursorExecutorTransportSettings(
+	options: ResolveCursorExecutorTransportSettingsOptions = {},
+): CursorExecutorTransportSettings {
+	const env = options.env ?? process.env;
+	const agentDir = options.agentDir ?? getDefaultCursorAgentDirectory(env);
+	const userConfig = options.userConfig ?? {};
+	const configuredBridge = userConfig.local?.piToolBridge;
+	const configuredExecutor = configuredBridge?.executor;
+	const defaultDescriptorDirectory = getDefaultCursorExecutorDescriptorDirectory(agentDir);
+
+	const transportFromEnvironment = hasNonEmptyEnvironmentValue(env, CURSOR_PI_TOOL_TRANSPORT_ENV);
+	const descriptorDirectoryFromEnvironment = hasNonEmptyEnvironmentValue(env, CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV);
+	const integrationSlugFromEnvironment = hasNonEmptyEnvironmentValue(env, CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV);
+	const transport = transportFromEnvironment
+		? resolveCursorPiToolTransport(env)
+		: configuredBridge?.transport ?? "mcp";
+	const descriptorDirectory = descriptorDirectoryFromEnvironment
+		? resolveCursorExecutorDescriptorDirectory(env)!
+		: configuredExecutor?.descriptorDirectory?.trim() || defaultDescriptorDirectory;
+	const descriptorDirectoryError = transport === "executor" && !isAbsolute(descriptorDirectory)
+		? `Cursor Executor descriptor directory must be absolute: ${descriptorDirectory}`
+		: undefined;
+	const integrationSlug = integrationSlugFromEnvironment
+		? resolveCursorExecutorIntegrationSlug(env)
+		: configuredExecutor?.integrationSlug?.trim() || "pi";
+
+	return {
+		transport,
+		descriptorDirectory,
+		integrationSlug,
+		...(descriptorDirectoryError ? { descriptorDirectoryError } : {}),
+		sources: {
+			transport: transportFromEnvironment ? "environment" : configuredBridge?.transport ? "user" : "builtin",
+			descriptorDirectory: descriptorDirectoryFromEnvironment
+				? "environment"
+				: configuredExecutor?.descriptorDirectory
+					? "user"
+					: "builtin",
+			integrationSlug: integrationSlugFromEnvironment
+				? "environment"
+				: configuredExecutor?.integrationSlug
+					? "user"
+					: "builtin",
+		},
+	};
+}
+
+export function getCursorExecutorTransportSettingsSignature(settings: CursorExecutorTransportSettings): string {
+	return JSON.stringify({
+		transport: settings.transport,
+		descriptorDirectory: settings.descriptorDirectory,
+		integrationSlug: settings.integrationSlug,
+	});
 }
 
 export function getCurrentCursorExecutorDescriptorPath(): string | undefined {
@@ -119,6 +213,15 @@ async function sweepStaleCursorExecutorDescriptors(directory: string): Promise<v
 		}));
 }
 
+export async function prepareCursorExecutorDescriptorDirectory(directory: string): Promise<void> {
+	if (!isAbsolute(directory)) throw new Error("Cursor Executor descriptor directory must be an absolute path");
+	await mkdir(directory, { recursive: true, mode: 0o700 });
+	const directoryMode = (await stat(directory)).mode & 0o777;
+	if ((directoryMode & 0o077) !== 0) {
+		throw new Error(`Executor descriptor directory ${directory} has mode ${directoryMode.toString(8)}; group and other access must be disabled`);
+	}
+}
+
 export async function writeCursorExecutorBridgeDescriptor(options: {
 	directory: string;
 	runId: string;
@@ -138,11 +241,7 @@ export async function writeCursorExecutorBridgeDescriptor(options: {
 		integrationSlug: options.integrationSlug,
 		tools: options.snapshot.tools.map(({ piToolName, mcpToolName }) => ({ piToolName, mcpToolName })),
 	};
-	await mkdir(options.directory, { recursive: true, mode: 0o700 });
-	const directoryMode = (await stat(options.directory)).mode & 0o777;
-	if ((directoryMode & 0o077) !== 0) {
-		throw new Error(`Executor descriptor directory ${options.directory} has mode ${directoryMode.toString(8)}; group and other access must be disabled`);
-	}
+	await prepareCursorExecutorDescriptorDirectory(options.directory);
 	await sweepStaleCursorExecutorDescriptors(options.directory);
 	const path = join(options.directory, `executor-bridge-${process.pid}-${options.runId}.json`);
 	const temporaryPath = `${path}.${randomUUID()}.tmp`;

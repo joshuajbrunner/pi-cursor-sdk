@@ -7,9 +7,11 @@ import {
 	CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV,
 	CURSOR_PI_TOOL_TRANSPORT_ENV,
 	cleanupOwnedCursorExecutorDescriptorsSync,
+	getDefaultCursorExecutorDescriptorDirectory,
 	removeCursorExecutorBridgeDescriptor,
 	resolveCursorExecutorDescriptorDirectory,
 	resolveCursorExecutorIntegrationSlug,
+	resolveCursorExecutorTransportSettings,
 	resolveCursorPiToolTransport,
 	writeCursorExecutorBridgeDescriptor,
 } from "../src/cursor-executor-transport.js";
@@ -37,6 +39,59 @@ describe("cursor Executor transport", () => {
 		expect(resolveCursorExecutorDescriptorDirectory({ [CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV]: " /tmp/bridges " })).toBe("/tmp/bridges");
 		expect(resolveCursorExecutorIntegrationSlug({})).toBe("pi");
 		expect(resolveCursorExecutorIntegrationSlug({ [CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV]: " workspace-pi " })).toBe("workspace-pi");
+	});
+
+	it("resolves user config without shell exports and lets environment values override it", () => {
+		const agentDir = "/tmp/pi-agent-test";
+		const configured = resolveCursorExecutorTransportSettings({
+			env: {},
+			agentDir,
+			userConfig: {
+				local: {
+					piToolBridge: {
+						transport: "executor",
+						executor: { integrationSlug: "workspace-pi" },
+					},
+				},
+			},
+		});
+		expect(configured).toEqual({
+			transport: "executor",
+			descriptorDirectory: getDefaultCursorExecutorDescriptorDirectory(agentDir),
+			integrationSlug: "workspace-pi",
+			sources: { transport: "user", descriptorDirectory: "builtin", integrationSlug: "user" },
+		});
+
+		const overridden = resolveCursorExecutorTransportSettings({
+			env: {
+				[CURSOR_PI_TOOL_TRANSPORT_ENV]: "mcp",
+				[CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV]: "/tmp/env-bridges",
+				[CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV]: "env-pi",
+			},
+			agentDir,
+			userConfig: configured.transport === "executor"
+				? { local: { piToolBridge: { transport: "executor", executor: { integrationSlug: "user-pi" } } } }
+				: {},
+		});
+		expect(overridden).toMatchObject({
+			transport: "mcp",
+			descriptorDirectory: "/tmp/env-bridges",
+			integrationSlug: "env-pi",
+			sources: { transport: "environment", descriptorDirectory: "environment", integrationSlug: "environment" },
+		});
+	});
+
+	it("reports a relative descriptor directory without throwing during status resolution", () => {
+		const settings = resolveCursorExecutorTransportSettings({
+			env: {},
+			agentDir: "/tmp/pi-agent-test",
+			userConfig: {
+				local: { piToolBridge: { transport: "executor", executor: { descriptorDirectory: "relative/bridges" } } },
+			},
+		});
+		expect(settings.transport).toBe("executor");
+		expect(settings.descriptorDirectory).toBe("relative/bridges");
+		expect(settings.descriptorDirectoryError).toContain("must be absolute: relative/bridges");
 	});
 
 	it("rejects an existing descriptor directory accessible by group or others", async () => {

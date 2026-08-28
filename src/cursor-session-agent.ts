@@ -7,7 +7,6 @@ import {
 	type CursorPiToolBridgeRun,
 } from "./cursor-pi-tool-bridge.js";
 import { computeCursorContextFingerprint } from "./context.js";
-import { resolveCursorPiToolTransport } from "./cursor-executor-transport.js";
 import { getCursorSessionFile, getCursorSessionScopeGeneration, getCursorSessionScopeKey } from "./cursor-session-scope.js";
 import {
 	getMatchingCursorSessionAgentResumeHandle,
@@ -209,7 +208,11 @@ function buildApiKeyPoolKeyFingerprint(apiKey: string): string {
 function buildBridgePoolKeySuffix(): string {
 	const registeredBridge = getRegisteredCursorPiToolBridge();
 	if (!registeredBridge) return "bridge:absent";
-	return `${registeredBridge.getToolSurfaceSignature()}:transport:${registeredBridge.getTransport()}`;
+	const transportFingerprint = createHash("sha256")
+		.update(registeredBridge.getTransportConfigurationSignature())
+		.digest("hex")
+		.slice(0, 16);
+	return `${registeredBridge.getToolSurfaceSignature()}:transport:${transportFingerprint}`;
 }
 
 function buildSessionAgentPoolKey(scopeKey: string, params: SessionCursorAgentCreateParams): string {
@@ -447,7 +450,6 @@ async function createSessionAgentEntry(
 	let sessionStore: OpenCursorSessionStore | undefined;
 	try {
 		const registeredBridge = getRegisteredCursorPiToolBridge();
-		const bridgeTransport = registeredBridge?.getTransport() ?? resolveCursorPiToolTransport();
 		if (registeredBridge) {
 			bridgeRun = await registeredBridge.createRun({
 				onToolRequest: params.onBridgeToolRequest,
@@ -480,7 +482,7 @@ async function createSessionAgentEntry(
 		const { identities } = storeSelection;
 		const resumeAttemptAllowed = storeSelection.resumeAttemptAllowed;
 		let resumeNotice = storeSelection.resumeFallback ? LOCAL_RESUME_FALLBACK_NOTICE : undefined;
-		const attachBridgeToCursor = bridgeTransport === "mcp";
+		const attachBridgeToCursor = bridgeRun?.transport === "mcp";
 		const buildAgentOptions = () => ({
 			apiKey: params.apiKey,
 			model: params.modelSelection,

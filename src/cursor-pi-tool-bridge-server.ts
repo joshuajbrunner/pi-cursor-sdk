@@ -7,7 +7,13 @@ import type {
 	CursorPiToolBridgeSnapshotApi,
 } from "./cursor-pi-tool-bridge-types.js";
 import { asRecord } from "./cursor-record-utils.js";
-import { resolveCursorPiToolTransport, type CursorPiToolTransport } from "./cursor-executor-transport.js";
+import type { CursorSdkConfig } from "./cursor-config.js";
+import {
+	getCursorExecutorTransportSettingsSignature,
+	resolveCursorExecutorTransportSettings,
+	type CursorExecutorTransportSettings,
+	type CursorPiToolTransport,
+} from "./cursor-executor-transport.js";
 import type { CursorPiToolBridgeRunImpl } from "./cursor-pi-tool-bridge-run.js";
 import {
 	buildCursorPiToolBridgeSnapshot,
@@ -23,6 +29,9 @@ const HTTP_SERVER_CLOSE_GRACE_MS = 250;
 export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 	private readonly pi: CursorPiToolBridgeSnapshotApi;
 	private readonly env: Record<string, string | undefined>;
+	private readonly loadUserConfig: () => CursorSdkConfig;
+	private readonly agentDir: string | undefined;
+	private transportSettings: CursorExecutorTransportSettings;
 	private readonly runs = new Set<CursorPiToolBridgeRunImpl>();
 	private readonly routes = new Map<string, CursorPiToolBridgeRunImpl>();
 	private httpServer?: HttpServer;
@@ -31,17 +40,47 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 	constructor(
 		pi: CursorPiToolBridgeSnapshotApi,
 		env: Record<string, string | undefined> = process.env,
+		loadUserConfig: () => CursorSdkConfig = () => ({}),
+		agentDir?: string,
 	) {
 		this.pi = pi;
 		this.env = env;
+		this.loadUserConfig = loadUserConfig;
+		this.agentDir = agentDir;
+		this.transportSettings = this.resolveTransportSettings();
 	}
 
 	isEnabled(): boolean {
 		return resolveCursorPiToolBridgeEnabled(this.env);
 	}
 
+	private resolveTransportSettings(): CursorExecutorTransportSettings {
+		return resolveCursorExecutorTransportSettings({
+			env: this.env,
+			userConfig: this.loadUserConfig(),
+			...(this.agentDir ? { agentDir: this.agentDir } : {}),
+		});
+	}
+
+	getTransportSettings(): CursorExecutorTransportSettings {
+		return this.transportSettings;
+	}
+
+	reloadTransportSettings(): CursorExecutorTransportSettings {
+		this.transportSettings = this.resolveTransportSettings();
+		return this.transportSettings;
+	}
+
 	getTransport(): CursorPiToolTransport {
-		return resolveCursorPiToolTransport(this.env);
+		return this.getTransportSettings().transport;
+	}
+
+	getTransportConfigurationSignature(): string {
+		return getCursorExecutorTransportSettingsSignature(this.getTransportSettings());
+	}
+
+	getLiveTransport(): CursorPiToolTransport | undefined {
+		return [...this.runs].reverse().find((run) => run.enabled)?.transport;
 	}
 
 	getToolSurfaceSignature(): string {
@@ -60,7 +99,14 @@ export class CursorPiToolBridgeRegistry implements CursorPiToolBridge {
 			})
 			: createEmptySnapshot();
 		const { CursorPiToolBridgeRunImpl } = await import("./cursor-pi-tool-bridge-run.js");
-		const run = new CursorPiToolBridgeRunImpl(this, this.env, snapshot, bridgeEnabled && snapshot.tools.length > 0, options);
+		const run = new CursorPiToolBridgeRunImpl(
+			this,
+			this.env,
+			this.getTransportSettings(),
+			snapshot,
+			bridgeEnabled && snapshot.tools.length > 0,
+			options,
+		);
 		this.runs.add(run);
 		await run.start();
 		run.emitStartDiagnostics(bridgeEnabled);

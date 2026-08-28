@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { loadCursorSdkUserConfig, type CursorSdkConfig } from "./cursor-config.js";
 import {
 	CURSOR_PI_TOOL_BRIDGE_DEBUG_ENV,
 	CURSOR_PI_TOOL_BRIDGE_DIAGNOSTIC_PREFIX,
@@ -43,9 +45,12 @@ export {
 	CURSOR_EXECUTOR_INTEGRATION_SLUG_ENV,
 	CURSOR_PI_TOOL_TRANSPORT_ENV,
 	getCurrentCursorExecutorDescriptorPath,
+	getDefaultCursorExecutorDescriptorDirectory,
 	resolveCursorExecutorDescriptorDirectory,
 	resolveCursorExecutorIntegrationSlug,
+	resolveCursorExecutorTransportSettings,
 	resolveCursorPiToolTransport,
+	type CursorExecutorTransportSettings,
 	type CursorPiToolTransport,
 } from "./cursor-executor-transport.js";
 export {
@@ -103,10 +108,22 @@ Get-CimInstance Win32_Process -Filter "Name = 'bash.exe' OR Name = 'sh.exe'" |
 	});
 }
 
-export function registerCursorPiToolBridge(pi: CursorPiToolBridgeExtensionApi): CursorPiToolBridge {
+export function registerCursorPiToolBridge(
+	pi: CursorPiToolBridgeExtensionApi,
+	options: {
+		env?: Record<string, string | undefined>;
+		userConfig?: CursorSdkConfig;
+	} = {},
+): CursorPiToolBridge {
 	bridgeToolExecutionAbortTracker.abortAll("Cursor pi tool bridge extension reloaded");
 	void registeredCursorPiToolBridge?.disposeAll("Cursor pi tool bridge extension reloaded");
-	const bridge = new CursorPiToolBridgeRegistry(pi);
+	const env = options.env ?? process.env;
+	const bridge = new CursorPiToolBridgeRegistry(
+		pi,
+		env,
+		options.userConfig ? () => options.userConfig! : loadCursorSdkUserConfig,
+		getAgentDir(),
+	);
 	registeredCursorPiToolBridge = bridge;
 	pi.on("tool_call", (event, ctx) => {
 		if (registeredCursorPiToolBridge !== bridge) return undefined;
@@ -158,8 +175,10 @@ export const __testUtils = {
 	createRegistry(
 		pi: CursorPiToolBridgeSnapshotApi,
 		env: Record<string, string | undefined> = process.env,
+		userConfig: CursorSdkConfig = {},
+		agentDir?: string,
 	) {
-		return new CursorPiToolBridgeRegistry(pi, env);
+		return new CursorPiToolBridgeRegistry(pi, env, () => userConfig, agentDir);
 	},
 	getRegisteredBridgeForTests() {
 		return registeredCursorPiToolBridge;

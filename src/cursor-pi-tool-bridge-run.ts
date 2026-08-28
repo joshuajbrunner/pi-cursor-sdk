@@ -21,11 +21,8 @@ import {
 } from "./cursor-pi-tool-bridge-diagnostics.js";
 import { resolveCursorPiToolBridgeCallTimeoutMs } from "./cursor-pi-tool-bridge-env.js";
 import {
-	CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV,
 	removeCursorExecutorBridgeDescriptor,
-	resolveCursorExecutorDescriptorDirectory,
-	resolveCursorExecutorIntegrationSlug,
-	resolveCursorPiToolTransport,
+	type CursorExecutorTransportSettings,
 	writeCursorExecutorBridgeDescriptor,
 } from "./cursor-executor-transport.js";
 import type {
@@ -104,6 +101,7 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 	readonly id: string;
 	readonly enabled: boolean;
 	readonly snapshot: CursorPiToolBridgeSnapshot;
+	readonly transport: CursorExecutorTransportSettings["transport"];
 	mcpServers?: Record<string, McpServerConfig>;
 
 	private readonly registry: CursorPiToolBridgeRunHost;
@@ -111,7 +109,7 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 	private readonly endpointPath: string;
 	private readonly callTimeoutMs: number;
 	private readonly knownMcpToolNames: ReadonlySet<string>;
-	private readonly bridgeTransport: ReturnType<typeof resolveCursorPiToolTransport>;
+	private readonly executorSettings: CursorExecutorTransportSettings;
 	private executorDescriptorPath?: string;
 	private readonly knownCursorMcpCallIds = new Set<string>();
 	private readonly queuedRequests: CursorPiBridgeToolRequest[] = [];
@@ -130,6 +128,7 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 	constructor(
 		registry: CursorPiToolBridgeRunHost,
 		env: Record<string, string | undefined>,
+		executorSettings: CursorExecutorTransportSettings,
 		snapshot: CursorPiToolBridgeSnapshot,
 		enabled: boolean,
 		options: CursorPiToolBridgeRunOptions = {},
@@ -144,25 +143,22 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 		this.endpointPath = `${MCP_ENDPOINT_ROOT}/${randomUUID()}/mcp`;
 		this.callTimeoutMs = resolveCursorPiToolBridgeCallTimeoutMs(env);
 		this.knownMcpToolNames = new Set(snapshot.tools.map((tool) => tool.mcpToolName));
-		this.bridgeTransport = resolveCursorPiToolTransport(env);
+		this.executorSettings = executorSettings;
+		this.transport = executorSettings.transport;
 	}
 
 	async start(): Promise<void> {
 		if (!this.enabled) return;
-		if (this.bridgeTransport === "mcp") await this.createSingleClientMcpServer();
+		if (this.transport === "mcp") await this.createSingleClientMcpServer();
 		const endpointUrl = await this.registry.registerRun(this.endpointPath, this);
 		this.mcpServers = { [MCP_SERVER_NAME]: { type: "http", url: endpointUrl } };
-		if (this.bridgeTransport !== "executor") return;
+		if (this.transport !== "executor") return;
 		try {
-			const descriptorDirectory = resolveCursorExecutorDescriptorDirectory(this.env);
-			if (!descriptorDirectory) {
-				throw new Error(`${CURSOR_EXECUTOR_DESCRIPTOR_DIR_ENV} is required when PI_CURSOR_PI_TOOL_TRANSPORT=executor`);
-			}
 			this.executorDescriptorPath = await writeCursorExecutorBridgeDescriptor({
-				directory: descriptorDirectory,
+				directory: this.executorSettings.descriptorDirectory,
 				runId: this.id,
 				endpointUrl,
-				integrationSlug: resolveCursorExecutorIntegrationSlug(this.env),
+				integrationSlug: this.executorSettings.integrationSlug,
 				snapshot: this.snapshot,
 			});
 		} catch (error) {
@@ -197,7 +193,7 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 			res.writeHead(410, { "content-type": "application/json" }).end(JSON.stringify({ error: "Cursor pi tool bridge run is disposed" }));
 			return;
 		}
-		if (this.bridgeTransport === "mcp") {
+		if (this.transport === "mcp") {
 			if (!this.mcpTransport) throw new Error("Cursor pi tool bridge MCP transport is unavailable");
 			await this.mcpTransport.handleRequest(req, res);
 			return;

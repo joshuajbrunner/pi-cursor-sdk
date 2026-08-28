@@ -92,20 +92,47 @@ Pi clones a Git package under `~/.pi/agent/git/`, checks out the ref, installs p
 
 ## 4. Start Pi in Executor mode
 
-Create a dedicated private directory. The bridge refuses an existing directory with group or other access rather than changing its permissions.
+The preferred configuration is the user-level `~/.pi/agent/cursor-sdk.json`; no shell exports are required. Start Pi normally and enter the explicit user command:
 
 ```bash
-export PI_CURSOR_PI_TOOL_TRANSPORT=executor
-export PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR="$HOME/.local/state/pi-cursor-sdk/executor-bridges"
-export PI_CURSOR_EXECUTOR_INTEGRATION_SLUG=pi
-
-install -d -m 700 "$PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR"
 pi --model cursor/grok-4.6
 ```
 
-Use one-run environment variables initially. Ask before persisting them in a shell profile, launch configuration, or project file.
+```text
+/cursor-executor on
+```
 
-After the Cursor-backed session starts, `/cursor-tools` reports the current descriptor path locally. The descriptor is created only while its bridge run is live.
+The command saves the following setting while preserving other config fields, creates the default descriptor directory with mode `0700`, and resets the current pooled Cursor agent:
+
+```json
+{
+  "local": {
+    "piToolBridge": {
+      "transport": "executor",
+      "executor": {
+        "integrationSlug": "pi"
+      }
+    }
+  }
+}
+```
+
+The default descriptor directory is `~/.pi/agent/cursor-executor-bridges`. An optional custom `descriptorDirectory` must be absolute. The bridge refuses an existing directory with group or other access rather than changing its permissions. Executor transport is intentionally user-config only: `.pi/cursor-sdk.json` project configuration cannot enable it or redirect descriptors.
+
+A trusted local agent may update `~/.pi/agent/cursor-sdk.json` after explicit approval, using the same shape and preserving unrelated fields. Manual edits take effect after Pi restarts; transport settings are cached for the process so an unrelated external edit cannot silently rotate a live endpoint. Invalid or unknown manually entered transport values are ignored, leaving the safe MCP default. `/cursor-executor` applies its own saved change intentionally by resetting the current pooled agent, while `/cursor-executor` and `/cursor-tools` report the effective transport and its source. Custom `descriptorDirectory` and `integrationSlug` values remain manual config fields; the command toggles only `transport`.
+
+Environment variables remain supported as higher-precedence one-run overrides for automation and rollback:
+
+```bash
+PI_CURSOR_PI_TOOL_TRANSPORT=executor \
+PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR="$HOME/.local/state/pi-cursor-sdk/executor-bridges" \
+PI_CURSOR_EXECUTOR_INTEGRATION_SLUG=pi \
+pi --model cursor/grok-4.6
+```
+
+Only `PI_CURSOR_PI_TOOL_TRANSPORT=executor` is needed when the built-in directory and slug defaults are acceptable. Do not persist overrides in a shell profile, launch configuration, or project file without approval.
+
+After the next Cursor-backed run starts, `/cursor-tools` reports both configured and live transport plus the current descriptor path locally. The descriptor exists only while its bridge run is live.
 
 ## 5. Register the live bridge without printing its endpoint
 
@@ -128,7 +155,13 @@ set -euo pipefail
 umask 077
 trap 'unset endpoint registration_payload registration_result connection_payload connection_result' EXIT
 
-descriptor_dir="${PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR:?PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR is required}"
+agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+config_path="$agent_dir/cursor-sdk.json"
+configured_descriptor_dir=""
+if [ -f "$config_path" ]; then
+  configured_descriptor_dir="$(jq -er '.local.piToolBridge.executor.descriptorDirectory // empty' "$config_path" 2>/dev/null || true)"
+fi
+descriptor_dir="${PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR:-${configured_descriptor_dir:-$agent_dir/cursor-executor-bridges}}"
 descriptor="${PI_CURSOR_EXECUTOR_DESCRIPTOR_PATH:-}"
 
 if [ -z "$descriptor" ]; then
@@ -242,7 +275,9 @@ pi install npm:pi-cursor-sdk
 After every Executor-mode Pi process has exited, ask before deleting leftover descriptor files. Remove only the extension's matching files, then remove the directory only if it is empty:
 
 ```bash
-descriptor_dir="${PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR:-$HOME/.local/state/pi-cursor-sdk/executor-bridges}"
+agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+configured_descriptor_dir="$(jq -er '.local.piToolBridge.executor.descriptorDirectory // empty' "$agent_dir/cursor-sdk.json" 2>/dev/null || true)"
+descriptor_dir="${PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR:-${configured_descriptor_dir:-$agent_dir/cursor-executor-bridges}}"
 if [ -d "$descriptor_dir" ]; then
   find "$descriptor_dir" -maxdepth 1 -type f -name 'executor-bridge-*.json' -delete
   rmdir "$descriptor_dir" 2>/dev/null || true
@@ -261,7 +296,7 @@ executor service uninstall
 
 - `connection_rejected` or streamable-HTTP connection failure usually means Executor still has a rotated endpoint. Re-register from the current descriptor.
 - A local-network-denied or loopback-policy error means the supervised daemon did not receive `EXECUTOR_ALLOW_LOCAL_NETWORK=true`. Recheck the generated launchd service definition; do not misdiagnose it as endpoint rotation.
-- No descriptor means no Executor-mode bridge run is currently live. Confirm the three environment variables and inspect `/cursor-tools`.
+- No descriptor means no Executor-mode bridge run is currently live. Run `/cursor-executor` and inspect `/cursor-tools`; if environment overrides are in use, verify them in the Pi process environment.
 - An insecure-directory error names the path and mode. Fix the directory intentionally with `chmod 700`; the extension does not change existing permissions.
 - A ninth reconnect while tool calls are pending returns HTTP 503 with JSON-RPC `-32000`. Let the calls finish or restart the bridge run.
 - Use `PI_CURSOR_PI_TOOL_BRIDGE_DEBUG=1` for Pi-side diagnostics, but never print the descriptor or call `executor.mcp.getServer` in captured logs.

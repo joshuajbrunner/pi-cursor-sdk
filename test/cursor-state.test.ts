@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -130,11 +130,17 @@ describe("Cursor runtime state", () => {
 	let tmpAgentDir: string;
 	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const originalHttp1Env = process.env[CURSOR_HTTP1_ENV];
+	const originalExecutorTransportEnv = process.env.PI_CURSOR_PI_TOOL_TRANSPORT;
+	const originalExecutorDescriptorDirEnv = process.env.PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR;
+	const originalExecutorSlugEnv = process.env.PI_CURSOR_EXECUTOR_INTEGRATION_SLUG;
 
 	beforeEach(() => {
 		tmpAgentDir = mkdtempSync(join(tmpdir(), "pi-cursor-state-"));
 		process.env.PI_CODING_AGENT_DIR = tmpAgentDir;
 		delete process.env[CURSOR_HTTP1_ENV];
+		delete process.env.PI_CURSOR_PI_TOOL_TRANSPORT;
+		delete process.env.PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR;
+		delete process.env.PI_CURSOR_EXECUTOR_INTEGRATION_SLUG;
 		__testUtils.sessionFastPreferences.clear();
 		__testUtils.resetCursorModeStateForTests();
 		modelDiscoveryTestUtils.registerModelItems(modelItems);
@@ -148,6 +154,12 @@ describe("Cursor runtime state", () => {
 		}
 		if (originalHttp1Env === undefined) delete process.env[CURSOR_HTTP1_ENV];
 		else process.env[CURSOR_HTTP1_ENV] = originalHttp1Env;
+		if (originalExecutorTransportEnv === undefined) delete process.env.PI_CURSOR_PI_TOOL_TRANSPORT;
+		else process.env.PI_CURSOR_PI_TOOL_TRANSPORT = originalExecutorTransportEnv;
+		if (originalExecutorDescriptorDirEnv === undefined) delete process.env.PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR;
+		else process.env.PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR = originalExecutorDescriptorDirEnv;
+		if (originalExecutorSlugEnv === undefined) delete process.env.PI_CURSOR_EXECUTOR_INTEGRATION_SLUG;
+		else process.env.PI_CURSOR_EXECUTOR_INTEGRATION_SLUG = originalExecutorSlugEnv;
 		rmSync(tmpAgentDir, { recursive: true, force: true });
 		vi.clearAllMocks();
 	});
@@ -762,6 +774,70 @@ describe("Cursor runtime state", () => {
 		expect(report).toContain("Suggested Executor integration slug: pi-workspace");
 		expect(report).toContain("executor tools search '<real pi tool name>'");
 		expect(report).toContain("PI_CURSOR_EXECUTOR_DESCRIPTOR_DIR: /tmp/private");
+	});
+
+	it("formatCursorToolsDebugReport reports user-configured Executor transport and its source", () => {
+		const pi = createPiHarness({
+			activeTools: ["intercom"],
+			initialTools: [createTestToolInfo("intercom")],
+		});
+		const report = formatCursorToolsDebugReport(pi, {}, {
+			local: { piToolBridge: { transport: "executor", executor: { integrationSlug: "saved-pi" } } },
+		});
+		expect(report).toContain("PI_CURSOR_PI_TOOL_TRANSPORT: executor (source: user)");
+		expect(report).toContain("Suggested Executor integration slug: saved-pi (source: user)");
+		expect(report).toContain("cursor-executor-bridges (source: builtin)");
+	});
+
+	it("reports an invalid persisted descriptor directory without breaking /cursor-tools", () => {
+		const report = formatCursorToolsDebugReport(createPiHarness(), {}, {
+			local: {
+				piToolBridge: {
+					transport: "executor",
+					executor: { descriptorDirectory: "relative/bridges" },
+				},
+			},
+		});
+		expect(report).toContain("Executor descriptor configuration error:");
+		expect(report).toContain("must be absolute: relative/bridges");
+	});
+
+	it("saves Executor transport in the user config without requiring shell exports", async () => {
+		const pi = createPiHarness();
+		registerCursorRuntimeControls(pi);
+		const ctx = createExtensionTestContext();
+
+		await pi.runCommand("cursor-executor", "on", { ui: ctx.ui, hasUI: true });
+
+		const saved = JSON.parse(readFileSync(join(tmpAgentDir, "cursor-sdk.json"), "utf8")) as {
+			local?: { piToolBridge?: { transport?: string } };
+		};
+		expect(saved.local?.piToolBridge?.transport).toBe("executor");
+		if (process.platform !== "win32") {
+			expect(statSync(join(tmpAgentDir, "cursor-executor-bridges")).mode & 0o777).toBe(0o700);
+		}
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Attended use only"), "warning");
+	});
+
+	it("can disable Executor transport when the persisted descriptor directory is invalid", async () => {
+		writeFileSync(join(tmpAgentDir, "cursor-sdk.json"), JSON.stringify({
+			local: {
+				piToolBridge: {
+					transport: "executor",
+					executor: { descriptorDirectory: "relative/bridges" },
+				},
+			},
+		}));
+		const pi = createPiHarness();
+		registerCursorRuntimeControls(pi);
+		const ctx = createExtensionTestContext();
+
+		await pi.runCommand("cursor-executor", "off", { ui: ctx.ui, hasUI: true });
+
+		const saved = JSON.parse(readFileSync(join(tmpAgentDir, "cursor-sdk.json"), "utf8")) as {
+			local?: { piToolBridge?: { transport?: string } };
+		};
+		expect(saved.local?.piToolBridge?.transport).toBe("mcp");
 	});
 
 	it("formatCursorToolsDebugReport notes disabled manifest", () => {

@@ -42,6 +42,17 @@ export type CursorConfigTrustLevel = "one-shot" | "environment" | "trusted-proje
 export type CursorRuntime = "local" | "cloud";
 export type CursorCloudContextHandoff = "never" | "fresh" | "bootstrap";
 export type CursorCloudEnvironmentType = "cloud" | "pool" | "machine";
+export type CursorPiToolTransportConfig = "mcp" | "executor";
+
+export interface CursorExecutorTransportConfig {
+	descriptorDirectory?: string;
+	integrationSlug?: string;
+}
+
+export interface CursorPiToolBridgeConfig {
+	transport?: CursorPiToolTransportConfig;
+	executor?: CursorExecutorTransportConfig;
+}
 
 export interface CursorCloudEnvironmentConfig {
 	type?: CursorCloudEnvironmentType | string;
@@ -73,6 +84,7 @@ export interface CursorSdkConfig {
 		force?: boolean;
 		resume?: boolean;
 		useHttp1ForAgent?: boolean;
+		piToolBridge?: CursorPiToolBridgeConfig;
 	};
 }
 
@@ -226,6 +238,25 @@ export function parseExplicitCursorCloudEnvNames(value: string | undefined, name
 	return parsed;
 }
 
+function parseCursorPiToolBridge(value: unknown): CursorPiToolBridgeConfig | undefined {
+	const bridge = asRecord(value);
+	if (!bridge) return undefined;
+	const parsed: CursorPiToolBridgeConfig = {};
+	if (bridge.transport === "mcp" || bridge.transport === "executor") parsed.transport = bridge.transport;
+	const executor = asRecord(bridge.executor);
+	if (executor) {
+		const descriptorDirectory = parseNonEmptyString(executor.descriptorDirectory);
+		const integrationSlug = parseNonEmptyString(executor.integrationSlug);
+		if (descriptorDirectory || integrationSlug) {
+			parsed.executor = {
+				...(descriptorDirectory ? { descriptorDirectory } : {}),
+				...(integrationSlug ? { integrationSlug } : {}),
+			};
+		}
+	}
+	return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
 function parseCloudEnvironment(value: unknown): CursorCloudEnvironmentConfig | undefined {
 	const environment = asRecord(value);
 	if (!environment) return undefined;
@@ -280,6 +311,8 @@ export function parseCursorSdkConfig(value: unknown): CursorSdkConfig | undefine
 		if (typeof local.force === "boolean") parsedLocal.force = local.force;
 		if (typeof local.resume === "boolean") parsedLocal.resume = local.resume;
 		if (typeof local.useHttp1ForAgent === "boolean") parsedLocal.useHttp1ForAgent = local.useHttp1ForAgent;
+		const piToolBridge = parseCursorPiToolBridge(local.piToolBridge);
+		if (piToolBridge) parsedLocal.piToolBridge = piToolBridge;
 		const sandboxOptions = asRecord(local.sandboxOptions);
 		if (typeof sandboxOptions?.enabled === "boolean") parsedLocal.sandboxOptions = { enabled: sandboxOptions.enabled };
 		if (Object.keys(parsedLocal).length > 0) config.local = parsedLocal;
@@ -331,7 +364,12 @@ export function loadCursorSdkUserConfig(path = getCursorSdkUserConfigPath()): Cu
 export function loadCursorSdkProjectConfig(cwd: string, projectTrusted: boolean): CursorSdkConfig | undefined {
 	if (!projectTrusted) return undefined;
 	const path = getCursorSdkProjectConfigPath(cwd);
-	return existsSync(path) ? readCursorSdkConfigFile(path) : undefined;
+	if (!existsSync(path)) return undefined;
+	const config = readCursorSdkConfigFile(path);
+	if (!config.local?.piToolBridge) return config;
+	const { piToolBridge: _ignoredPiToolBridge, ...local } = config.local;
+	const { local: _ignoredLocal, ...withoutLocal } = config;
+	return Object.keys(local).length > 0 ? { ...withoutLocal, local } : withoutLocal;
 }
 
 export function loadCursorSdkConfig(options: LoadCursorSdkConfigOptions = {}): { user: CursorSdkConfig; project?: CursorSdkConfig } {
@@ -438,6 +476,8 @@ export function mergeCursorSdkConfigForUpdate(
 	const baseCloud = asRecord(base.cloud);
 	const baseLocal = asRecord(base.local);
 	const baseSandboxOptions = asRecord(baseLocal?.sandboxOptions);
+	const basePiToolBridge = asRecord(baseLocal?.piToolBridge);
+	const baseExecutorTransport = asRecord(basePiToolBridge?.executor);
 	return {
 		...base,
 		...patch,
@@ -451,6 +491,17 @@ export function mergeCursorSdkConfigForUpdate(
 						...patch.local,
 						...(baseSandboxOptions || patch.local?.sandboxOptions
 							? { sandboxOptions: { ...baseSandboxOptions, ...patch.local?.sandboxOptions } }
+							: {}),
+						...(basePiToolBridge || patch.local?.piToolBridge
+							? {
+									piToolBridge: {
+										...basePiToolBridge,
+										...patch.local?.piToolBridge,
+										...(baseExecutorTransport || patch.local?.piToolBridge?.executor
+											? { executor: { ...baseExecutorTransport, ...patch.local?.piToolBridge?.executor } }
+											: {}),
+									},
+								}
 							: {}),
 					},
 				}
