@@ -1,5 +1,6 @@
-import type { McpServerConfig } from "@cursor/sdk";
+import type { McpServerConfig, SDKCustomTool } from "@cursor/sdk";
 import type { Context, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { CursorPiToolBridgeTransport } from "./cursor-pi-tool-bridge-env.js";
 import type { CursorSdkEventDebugRecorder } from "./cursor-sdk-event-debug.js";
 import type {
 	ExtensionAPI,
@@ -58,7 +59,9 @@ export interface CursorPiBridgeToolRequest {
 export interface CursorPiToolBridgeRun {
 	id: string;
 	enabled: boolean;
+	transport: CursorPiToolBridgeTransport;
 	mcpServers?: Record<string, McpServerConfig>;
+	customTools?: Record<string, SDKCustomTool>;
 	snapshot: CursorPiToolBridgeSnapshot;
 	takeQueuedToolRequests(): CursorPiBridgeToolRequest[];
 	resolveToolResults(toolResults: readonly ToolResultMessage[]): Promise<void>;

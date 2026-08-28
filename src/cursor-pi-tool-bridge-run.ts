@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { McpServerConfig } from "@cursor/sdk";
+import type { McpServerConfig, SDKCustomTool } from "@cursor/sdk";
 import type { Context, ToolResultMessage } from "@earendil-works/pi-ai";
 import { Server as McpProtocolServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -18,7 +18,8 @@ import {
 	type CursorPiToolBridgeRequestDiagnosticFields,
 	writeCursorPiToolBridgeDiagnostic,
 } from "./cursor-pi-tool-bridge-diagnostics.js";
-import { resolveCursorPiToolBridgeCallTimeoutMs } from "./cursor-pi-tool-bridge-env.js";
+import { resolveCursorPiToolBridgeCallTimeoutMs, resolveCursorPiToolBridgeTransport } from "./cursor-pi-tool-bridge-env.js";
+import type { CursorPiToolBridgeTransport } from "./cursor-pi-tool-bridge-env.js";
 import type {
 	CursorPiBridgeToolRequest,
 	CursorPiToolBridgeRun,
@@ -30,6 +31,7 @@ import {
 	containsKnownMcpToolName,
 	convertPiContentToMcpContent,
 	normalizeMcpArgs,
+	snapshotToCustomTools,
 	snapshotToolToMcpTool,
 	waitForProtocolFlush,
 } from "./cursor-pi-tool-bridge-mcp.js";
@@ -56,7 +58,9 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 	readonly id: string;
 	readonly enabled: boolean;
 	readonly snapshot: CursorPiToolBridgeSnapshot;
+	readonly transport: CursorPiToolBridgeTransport;
 	mcpServers?: Record<string, McpServerConfig>;
+	customTools?: Record<string, SDKCustomTool>;
 
 	private readonly registry: CursorPiToolBridgeRunHost;
 	private readonly env: Record<string, string | undefined>;
@@ -91,12 +95,23 @@ export class CursorPiToolBridgeRunImpl implements CursorPiToolBridgeRun {
 		this.debugRecorder = options.debugRecorder;
 		this.id = `cursor-pi-bridge-run-${randomUUID()}`;
 		this.endpointPath = `${MCP_ENDPOINT_ROOT}/${randomUUID()}/mcp`;
+		this.transport = resolveCursorPiToolBridgeTransport(env);
 		this.callTimeoutMs = resolveCursorPiToolBridgeCallTimeoutMs(env);
 		this.knownMcpToolNames = new Set(snapshot.tools.map((tool) => tool.mcpToolName));
 	}
 
 	async start(): Promise<void> {
 		if (!this.enabled) return;
+		if (this.transport === "custom-tools") {
+			// In-process tools: no loopback HTTP server and no mcpServers entry, so
+			// nothing is exposed for an external-MCP-server block to reject. Reuses
+			// the same enqueueToolRequest dispatch as the HTTP transport; a synthetic
+			// call id keeps knownCursorMcpCallIds populated for envelope recognition.
+			this.customTools = snapshotToCustomTools(this.snapshot, (mcpToolName, args, context) =>
+				this.enqueueToolRequest(mcpToolName, args, context.toolCallId?.trim() || `custom-${randomUUID()}`),
+			);
+			return;
+		}
 		await this.createMcpServer();
 		const endpointUrl = await this.registry.registerRun(this.endpointPath, this);
 		this.mcpServers = { [MCP_SERVER_NAME]: { type: "http", url: endpointUrl } };

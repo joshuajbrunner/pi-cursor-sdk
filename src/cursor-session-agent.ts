@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AgentModeOption, LocalAgentOptions, LocalAgentStore, ModelSelection, SDKAgent, SettingSource } from "@cursor/sdk";
+import type { AgentModeOption, LocalAgentOptions, LocalAgentStore, ModelSelection, SDKAgent, SDKCustomTool, SettingSource } from "@cursor/sdk";
 import type { Context } from "@earendil-works/pi-ai";
 import {
 	getRegisteredCursorPiToolBridge,
@@ -156,6 +156,7 @@ export function buildCursorLocalAgentOptions(options: {
 	settingSources?: SettingSource[];
 	localSafety?: CursorLocalSafetyOptions;
 	store?: LocalAgentStore;
+	customTools?: Record<string, SDKCustomTool>;
 }): LocalAgentOptions {
 	return {
 		cwd: options.cwd,
@@ -163,6 +164,7 @@ export function buildCursorLocalAgentOptions(options: {
 		...(options.settingSources ? { settingSources: options.settingSources } : {}),
 		...(options.localSafety?.autoReview === true ? { autoReview: true } : {}),
 		...(options.localSafety?.sandboxEnabled === true ? { sandboxOptions: { enabled: true } } : {}),
+		...(options.customTools ? { customTools: options.customTools } : {}),
 	};
 }
 
@@ -451,7 +453,7 @@ async function createSessionAgentEntry(
 				onToolRequest: params.onBridgeToolRequest,
 				debugRecorder: params.debugRecorder,
 			});
-			if (!bridgeRun.enabled || !bridgeRun.mcpServers) {
+			if (!bridgeRun.enabled || (!bridgeRun.mcpServers && !bridgeRun.customTools)) {
 				await bridgeRun.dispose();
 				bridgeRun = undefined;
 			}
@@ -487,6 +489,7 @@ async function createSessionAgentEntry(
 				settingSources: params.settingSources,
 				localSafety: params.localSafety,
 				store: sessionStore!.store,
+				customTools: bridgeRun?.customTools,
 			}),
 			...(bridgeRun?.mcpServers ? { mcpServers: bridgeRun.mcpServers } : {}),
 		});

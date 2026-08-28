@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import type { SDKCustomTool, SDKCustomToolContent, SDKCustomToolContext, SDKCustomToolResult, SDKJsonValue } from "@cursor/sdk";
 import type { Context, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { buildCursorPiBridgeMcpToolDescription, CURSOR_PI_BRIDGE_MCP_TOOL_PREFIX } from "./cursor-bridge-contract.js";
-import type { CursorPiBridgeToolDefinition, CursorPiMcpInputSchema } from "./cursor-pi-tool-bridge-types.js";
+import type { CursorPiBridgeToolDefinition, CursorPiMcpInputSchema, CursorPiToolBridgeSnapshot } from "./cursor-pi-tool-bridge-types.js";
 import { asRecord, stringifyUnknown } from "./cursor-record-utils.js";
 
 export function normalizeMcpInputSchema(schema: unknown): CursorPiMcpInputSchema {
@@ -66,6 +67,85 @@ export function snapshotToolToMcpTool(tool: CursorPiBridgeToolDefinition): Tool 
 		}),
 		inputSchema: tool.inputSchema,
 		_meta: { piToolName: tool.piToolName },
+	};
+}
+
+/**
+ * Invokes a bridge tool by its MCP tool name and resolves to the same
+ * `CallToolResult` the HTTP-MCP transport produces. In custom-tools mode the
+ * bridge run supplies its own `enqueueToolRequest` here, so both transports
+ * share one dispatch path.
+ */
+export type CursorPiBridgeCustomToolInvoker = (
+	mcpToolName: string,
+	args: Record<string, unknown>,
+	context: SDKCustomToolContext,
+) => Promise<CallToolResult>;
+
+/**
+ * Builds the in-process `local.customTools` map from a bridge snapshot. Keys
+ * reuse each tool's existing `mcpToolName` (the `mcp_pi_bridge_*` stem) so the
+ * model-facing names and the display/recognition layer are identical to the
+ * HTTP-MCP transport.
+ */
+/**
+ * Reinterprets a bridge tool's JSON-Schema object as the SDK custom-tool input
+ * schema type. The bridge schema is already JSON (its open `[key: string]:
+ * unknown` index just isn't statically narrowed to `SDKJsonValue`), so this is a
+ * type-level reinterpretation with no runtime change.
+ */
+function toCustomToolInputSchema(schema: CursorPiMcpInputSchema): Record<string, SDKJsonValue> {
+	return schema as Record<string, SDKJsonValue>;
+}
+
+export function snapshotToCustomTools(
+	snapshot: CursorPiToolBridgeSnapshot,
+	invoke: CursorPiBridgeCustomToolInvoker,
+): Record<string, SDKCustomTool> {
+	const customTools: Record<string, SDKCustomTool> = {};
+	for (const tool of snapshot.tools) {
+		const mcpToolName = tool.mcpToolName;
+		customTools[mcpToolName] = {
+			description: buildCursorPiBridgeMcpToolDescription({
+				piToolName: tool.piToolName,
+				mcpToolName,
+				piToolDescription: tool.description,
+				piToolPromptGuidelines: tool.promptGuidelines,
+			}),
+			inputSchema: toCustomToolInputSchema(tool.inputSchema),
+			execute: async (args, context) =>
+				convertMcpResultToCustomToolResult(await invoke(mcpToolName, args, context)),
+		};
+	}
+	return customTools;
+}
+
+/**
+ * Converts a bridge `CallToolResult` into the SDK custom-tool result shape.
+ * MCP text/image blocks map directly; anything else is stringified to text.
+ * An empty result collapses to a single empty text block so the model always
+ * receives well-formed content. A valid `structuredContent` object is carried
+ * through so structured tool output survives the custom-tools transport.
+ */
+export function convertMcpResultToCustomToolResult(result: CallToolResult): SDKCustomToolResult {
+	const content: SDKCustomToolContent[] = [];
+	for (const block of result.content ?? []) {
+		const record = asRecord(block);
+		if (record?.type === "text" && typeof record.text === "string") {
+			content.push({ type: "text", text: record.text });
+			continue;
+		}
+		if (record?.type === "image" && typeof record.data === "string" && typeof record.mimeType === "string") {
+			content.push({ type: "image", data: record.data, mimeType: record.mimeType });
+			continue;
+		}
+		content.push({ type: "text", text: stringifyUnknown(block) });
+	}
+	const structuredContent = asRecord(result.structuredContent);
+	return {
+		content: content.length > 0 ? content : [{ type: "text", text: "" }],
+		...(result.isError ? { isError: true } : {}),
+		...(structuredContent ? { structuredContent: structuredContent as Record<string, SDKJsonValue> } : {}),
 	};
 }
 

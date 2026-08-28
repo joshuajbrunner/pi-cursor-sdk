@@ -11,6 +11,12 @@
 - Preserve current Pi instructions in fresh cloud prompts, and ignore system updates when finding pending replay/bridge tool results and steering input.
 - Handle Pi's XML-wrapped tool/rule/skill sections and project-context serialization without duplicating local rules or skill catalogs. Cloud keeps project instructions and omits the local skill catalog.
 
+## Unreleased
+
+### Added
+
+- Add `PI_CURSOR_PI_TOOL_TRANSPORT` to select how bridged pi tools reach the Cursor agent. The default `mcp` keeps the tokenized loopback `127.0.0.1` MCP server the SDK connects to. `custom-tools` registers the identical `pi__*` surface as in-process SDK `customTools` (under the synthetic `custom-user-tools` server) with no external MCP server created or connected to, for environments that block external MCP server connections; it adds no `mcpServers` entry, leaving user/project-configured Cursor MCP servers untouched. Both transports share one dispatch path; an unrecognized value fails fast at startup.
+
 ## 0.3.6 - 2026-08-18
 
 ### Fixed

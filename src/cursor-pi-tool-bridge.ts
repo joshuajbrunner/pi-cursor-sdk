@@ -37,10 +37,14 @@ export {
 	CURSOR_PI_TOOL_BRIDGE_BUILTINS_ENV,
 	CURSOR_PI_TOOL_BRIDGE_CALL_TIMEOUT_MS_ENV,
 	CURSOR_PI_TOOL_BRIDGE_ENV,
+	CURSOR_PI_TOOL_BRIDGE_TRANSPORTS,
+	CURSOR_PI_TOOL_TRANSPORT_ENV,
 	resolveCursorPiToolBridgeBuiltinsEnabled,
 	resolveCursorPiToolBridgeCallTimeoutMs,
 	resolveCursorPiToolBridgeEnabled,
+	resolveCursorPiToolBridgeTransport,
 } from "./cursor-pi-tool-bridge-env.js";
+export type { CursorPiToolBridgeTransport } from "./cursor-pi-tool-bridge-env.js";
 export {
 	buildCursorPiToolBridgeSnapshot,
 	buildCursorPiToolBridgeSurfaceSignature,
