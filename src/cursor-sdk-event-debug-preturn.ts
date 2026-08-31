@@ -13,7 +13,8 @@ export type PreTurnEvent =
 	| ({ type: "lifecycle"; hook: string; phase: "enter" | "exit"; depth: number; model?: string; runtime?: string; durationMs?: number; error?: string } & Common)
 	| ({ type: "prompt-mutation"; label: string; hook?: string; before: string; after: string; changed: boolean; beforeSha1: string; afterSha1: string; beforeLength: number; afterLength: number; diff: string } & Common)
 	| ({ type: "tool-activation"; source: string; reason?: string; before: string[]; after: string[]; added: string[]; removed: string[] } & Common)
-	| ({ type: "skill-state"; site: string; operation: string; beforeKeys: string[]; afterKeys: string[]; beforeCount: number; afterCount: number } & Common);
+	| ({ type: "skill-state"; site: string; operation: string; beforeKeys: string[]; afterKeys: string[]; beforeCount: number; afterCount: number } & Common)
+	| ({ type: "agents-context-decision"; outcome: string; runtime: string; systemPromptOptionsPresent: boolean; contextFiles: Array<{ path: string; overlap: string }>; settingSourcesRaw?: string; settingSources?: string[] | null; model?: string; agentDir?: string; serializedSectionLength?: number; promptLength: number } & Common);
 
 type Common = { seq: number; t: number; ts: string };
 type PreTurnEventInput = { [K in PreTurnEvent["type"]]: Omit<Extract<PreTurnEvent, { type: K }>, keyof Common> }[PreTurnEvent["type"]];
@@ -64,6 +65,9 @@ export function recordToolActivation(entry: { source: string; reason?: string; b
 }
 export function recordSkillState(entry: { site: string; operation: string; beforeKeys: string[]; afterKeys: string[] }): void {
 	push({ type: "skill-state", ...entry, beforeCount: entry.beforeKeys.length, afterCount: entry.afterKeys.length });
+}
+export function recordAgentsContextDecision(entry: Omit<Extract<PreTurnEvent, { type: "agents-context-decision" }>, keyof Common | "type">): void {
+	push({ type: "agents-context-decision", ...entry });
 }
 export function drainPreTurnEvents(): PreTurnEvent[] {
 	if (!enabled()) return [];

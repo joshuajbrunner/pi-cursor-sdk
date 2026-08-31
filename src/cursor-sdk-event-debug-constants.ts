@@ -44,6 +44,7 @@ export const ARTIFACTS = {
 	promptMutations: "prompt-mutations.jsonl",
 	toolActivation: "tool-activation.jsonl",
 	skillState: "skill-state.jsonl",
+	agentsContextDecision: "agents-context-decision.jsonl",
 	promptMutationsDiff: "prompt-mutations.diff",
 	waitResult: "wait-result.json",
 	conversation: "conversation.json",

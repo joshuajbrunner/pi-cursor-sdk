@@ -311,7 +311,7 @@ export class CursorSdkEventDebugSink {
 		if (events.length === 0) return;
 		let diff = "";
 		for (const event of events) {
-			const file = event.type === "lifecycle" ? ARTIFACTS.lifecycle : event.type === "prompt-mutation" ? ARTIFACTS.promptMutations : event.type === "tool-activation" ? ARTIFACTS.toolActivation : ARTIFACTS.skillState;
+			const file = event.type === "lifecycle" ? ARTIFACTS.lifecycle : event.type === "prompt-mutation" ? ARTIFACTS.promptMutations : event.type === "tool-activation" ? ARTIFACTS.toolActivation : event.type === "skill-state" ? ARTIFACTS.skillState : ARTIFACTS.agentsContextDecision;
 			const jsonEvent = event.type === "prompt-mutation"
 				? { ...event, before: undefined, after: undefined, diff: undefined, beforeBody: `prompt-bodies/${event.seq}-${event.label}.before.txt`, afterBody: `prompt-bodies/${event.seq}-${event.label}.after.txt` }
 				: event;
@@ -531,7 +531,7 @@ export class CursorSdkEventDebugSink {
 				// Ignore missing prior artifacts when reusing a pinned run directory.
 			}
 		}
-		for (const fileName of [ARTIFACTS.lifecycle, ARTIFACTS.promptMutations, ARTIFACTS.toolActivation, ARTIFACTS.skillState]) {
+		for (const fileName of [ARTIFACTS.lifecycle, ARTIFACTS.promptMutations, ARTIFACTS.toolActivation, ARTIFACTS.skillState, ARTIFACTS.agentsContextDecision]) {
 			writeFileSync(join(this.artifactDir, fileName), "");
 		}
 	}
