@@ -4,6 +4,8 @@ import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import type { AgentModeOption, SDKImage } from "@cursor/sdk";
 import { CURSOR_PI_BRIDGE_PREFERENCE_TEXT } from "./cursor-bridge-contract.js";
 import { getCursorReplayPromptLabel } from "./cursor-tool-presentation-registry.js";
+import { recordPromptMutation } from "./cursor-sdk-event-debug-preturn.js";
+import { resolveCursorSdkEventDebugEnabled } from "../shared/cursor-sdk-event-debug-env.mjs";
 
 export interface CursorPrompt {
 	text: string;
@@ -135,7 +137,7 @@ function formatToolCall(toolCall: ToolCall): string {
 	return `Tool call (${getCursorReplayPromptLabel(toolCall.name)}, call ${toolCall.id}): ${args}`;
 }
 
-function sanitizeSystemPromptForCursor(systemPrompt: string): string {
+function sanitizeSystemPromptForCursor(systemPrompt: string, record = true): string {
 	let sanitized = systemPrompt;
 	sanitized = sanitized.replace(
 		/Available tools:\n[\s\S]*?\n\nIn addition to the tools above, you may have access to other custom tools depending on the project\.\n\n/g,
@@ -148,7 +150,9 @@ function sanitizeSystemPromptForCursor(systemPrompt: string): string {
 	// Keep the Agent Skills catalog. Cursor-specific skill activation wording is normalized
 	// by cursor-skill-tool.ts before this prompt reaches the Cursor SDK provider.
 	sanitized = sanitized.replace(/\n+Semantic code intelligence priority:[\s\S]*$/g, "");
-	return sanitized.trim();
+	const result = sanitized.trim();
+	if (record) recordPromptMutation({ label: "sanitize", hook: "buildCursorPrompt", before: systemPrompt, after: result });
+	return result;
 }
 
 function formatMessage(msg: Message): string | undefined {
@@ -260,6 +264,10 @@ interface CursorContextFingerprintPayload {
 	messageHashes: string[];
 }
 
+const previousSanitizedSystemHashes = new Map<string, string>();
+const MAX_SANITIZED_HASH_SCOPES = 256;
+export function resetCursorBootstrapObservationStateForTests(): void { previousSanitizedSystemHashes.clear(); }
+
 function hashCursorContextValue(value: string): string {
 	return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
@@ -341,6 +349,33 @@ export function computeCursorContextFingerprint(context: Context): string {
 		messageHashes: context.messages.map((message, index) => serializeRawPiMessageForFingerprint(message, index)),
 	};
 	return JSON.stringify(payload);
+}
+
+export interface CursorBootstrapObservation {
+	rawSystemHash: string;
+	sanitizedSystemHash: string;
+	sanitizedBaselineAvailable: boolean;
+	wouldBootstrapOnRaw: boolean;
+	wouldBootstrapOnSanitized: boolean;
+	wastedBootstrap: boolean;
+}
+
+export function computeCursorBootstrapObservation(
+	sendState: { bootstrapped: boolean; contextFingerprint: string },
+	context: Context,
+	sessionScope = "default",
+): CursorBootstrapObservation | undefined {
+	if (!resolveCursorSdkEventDebugEnabled()) return undefined;
+	const rawSystemHash = hashCursorContextValue(context.systemPrompt ?? "");
+	const sanitizedSystemHash = hashCursorContextValue(sanitizeSystemPromptForCursor(context.systemPrompt ?? "", false));
+	const previous = parseCursorContextFingerprint(sendState.contextFingerprint);
+	const wouldBootstrapOnRaw = shouldBootstrapCursorContext(sendState, context);
+	const previousSanitizedSystemHash = previousSanitizedSystemHashes.get(sessionScope);
+	const wouldBootstrapOnSanitized = !sendState.bootstrapped || !previous || previousSanitizedSystemHash === undefined || sanitizedSystemHash !== previousSanitizedSystemHash;
+	previousSanitizedSystemHashes.delete(sessionScope);
+	previousSanitizedSystemHashes.set(sessionScope, sanitizedSystemHash);
+	while (previousSanitizedSystemHashes.size > MAX_SANITIZED_HASH_SCOPES) previousSanitizedSystemHashes.delete(previousSanitizedSystemHashes.keys().next().value!);
+	return { rawSystemHash, sanitizedSystemHash, sanitizedBaselineAvailable: previousSanitizedSystemHash !== undefined, wouldBootstrapOnRaw, wouldBootstrapOnSanitized, wastedBootstrap: wouldBootstrapOnRaw && !wouldBootstrapOnSanitized };
 }
 
 export function shouldBootstrapCursorContext(

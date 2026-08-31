@@ -1,4 +1,5 @@
 export declare const CURSOR_SDK_EVENT_DEBUG_ENV: "PI_CURSOR_SDK_EVENT_DEBUG";
+export declare function resolveCursorSdkEventDebugEnabled(env?: Record<string, string | undefined>): boolean;
 export declare const CURSOR_SDK_EVENT_DEBUG_DIR_ENV: "PI_CURSOR_SDK_EVENT_DEBUG_DIR";
 export declare const CURSOR_SDK_EVENT_DEBUG_RUN_DIR_ENV: "PI_CURSOR_SDK_EVENT_DEBUG_RUN_DIR";
 export declare const CURSOR_SDK_EVENT_DEBUG_SESSION_DIR_ENV: "PI_CURSOR_SDK_EVENT_DEBUG_SESSION_DIR";

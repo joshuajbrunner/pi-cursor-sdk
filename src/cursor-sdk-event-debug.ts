@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { AgentModeOption, InteractionUpdate } from "@cursor/sdk";
@@ -17,7 +17,14 @@ import {
 	CURSOR_SDK_EVENT_DEBUG_STDERR_ENV,
 	SESSION_MANIFEST,
 	SESSION_PI_SESSION_SNAPSHOT,
+	resolveCursorSdkEventDebugEnabled,
 } from "./cursor-sdk-event-debug-constants.js";
+import {
+	drainPreTurnEvents,
+	getPreTurnDroppedCount,
+	setPreTurnEventSink,
+	type PreTurnEvent,
+} from "./cursor-sdk-event-debug-preturn.js";
 import {
 	allocateCursorSdkEventDebugTurn,
 	resetCursorSdkEventDebugSessionStateForTests,
@@ -34,6 +41,7 @@ export {
 	CURSOR_SDK_EVENT_DEBUG_SESSION_DIR_ENV,
 	CURSOR_SDK_EVENT_DEBUG_STDERR_ENV,
 	resolveCursorSdkEventDebugBaseDir,
+	resolveCursorSdkEventDebugEnabled,
 } from "./cursor-sdk-event-debug-constants.js";
 
 const MAX_CURSOR_SDK_EVENT_DEBUG_JSONL_BYTES = 2 * 1024 * 1024;
@@ -141,9 +149,7 @@ function serializeCursorSdkEventDebugRecord(record: unknown): string {
 	}
 }
 
-export function resolveCursorSdkEventDebugEnabled(env: Record<string, string | undefined> = process.env): boolean {
-	return parseEnvBoolean(env[CURSOR_SDK_EVENT_DEBUG_ENV], false);
-}
+
 
 export interface CursorSdkEventDebugRecorder {
 	recordLiveRunEvent(event: CursorLiveQueuedEvent): void;
@@ -290,11 +296,39 @@ export class CursorSdkEventDebugSink {
 			pinnedRun: allocation.pinnedRun,
 			artifacts: ARTIFACTS,
 			warnings: [
-				"Raw artifact files may contain local paths, project text, tool args/results, or secrets from the workspace. Do not commit or share them.",
+				"Raw artifact files may contain local paths, project text, tool args/results, or secrets from the workspace. Full prompt bodies are also captured. Do not commit or share them.",
 			],
 		};
 		this.clearKnownArtifactFiles();
+		const preTurnEvents = drainPreTurnEvents();
+		this.metadata = { ...this.metadata, droppedCount: getPreTurnDroppedCount(), processId: process.pid };
 		writeFileSync(join(this.artifactDir, ARTIFACTS.metadata), `${JSON.stringify(this.metadata, null, 2)}\n`);
+		this.writePreTurnEvents(preTurnEvents);
+		setPreTurnEventSink((events) => this.writePreTurnEvents(events));
+	}
+
+	private writePreTurnEvents(events: PreTurnEvent[]): void {
+		if (events.length === 0) return;
+		let diff = "";
+		for (const event of events) {
+			const file = event.type === "lifecycle" ? ARTIFACTS.lifecycle : event.type === "prompt-mutation" ? ARTIFACTS.promptMutations : event.type === "tool-activation" ? ARTIFACTS.toolActivation : ARTIFACTS.skillState;
+			const jsonEvent = event.type === "prompt-mutation"
+				? { ...event, before: undefined, after: undefined, diff: undefined, beforeBody: `prompt-bodies/${event.seq}-${event.label}.before.txt`, afterBody: `prompt-bodies/${event.seq}-${event.label}.after.txt` }
+				: event;
+			this.bufferJsonl(file, jsonEvent);
+			if (event.type === "prompt-mutation") {
+				const dir = join(this.artifactDir, "prompt-bodies");
+				mkdirSync(dir, { recursive: true });
+				writeFileSync(join(dir, `${event.seq}-${event.label}.before.txt`), event.before);
+				writeFileSync(join(dir, `${event.seq}-${event.label}.after.txt`), event.after);
+				diff += `# ${event.seq} ${event.label}${event.hook ? ` (${event.hook})` : ""}\n${event.diff}\n`;
+			}
+		}
+		if (diff) {
+			const path = join(this.artifactDir, ARTIFACTS.promptMutationsDiff);
+			if (!existsSync(path) || statSync(path).size + Buffer.byteLength(diff) <= MAX_CURSOR_SDK_EVENT_DEBUG_JSONL_BYTES) appendFileSync(path, diff);
+			else appendFileSync(path, "\n[diff truncated: remaining prompt mutations are in prompt-bodies/ and prompt-mutations.jsonl by sequence]\n");
+		}
 	}
 
 	recordProviderMeta(meta: Record<string, unknown>): void {
@@ -485,12 +519,20 @@ export class CursorSdkEventDebugSink {
 	}
 
 	private clearKnownArtifactFiles(): void {
+		try {
+			rmSync(join(this.artifactDir, "prompt-bodies"), { recursive: true, force: true });
+		} catch {
+			// Ignore stale prompt body cleanup failures.
+		}
 		for (const fileName of Object.values(ARTIFACTS)) {
 			try {
 				unlinkSync(join(this.artifactDir, fileName));
 			} catch {
 				// Ignore missing prior artifacts when reusing a pinned run directory.
 			}
+		}
+		for (const fileName of [ARTIFACTS.lifecycle, ARTIFACTS.promptMutations, ARTIFACTS.toolActivation, ARTIFACTS.skillState]) {
+			writeFileSync(join(this.artifactDir, fileName), "");
 		}
 	}
 
@@ -545,6 +587,7 @@ export class CursorSdkEventDebugSink {
 			process.stderr.write(`${CURSOR_SDK_EVENT_DEBUG_LOG_PREFIX} ${JSON.stringify(summary)}\n`);
 		}
 		this.finalized = true;
+		setPreTurnEventSink(undefined);
 	}
 
 	private appendProviderJsonl(phase: string, payload: unknown): void {

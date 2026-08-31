@@ -6,6 +6,7 @@ import { parseEnvBoolean } from "./cursor-env-boolean.js";
 import { isCursorModel } from "./cursor-model.js";
 import { registerCursorModelLifecycle, type CursorModelLifecycleExtensionApi } from "./cursor-model-lifecycle.js";
 import { resolveCursorPiToolBridgeEnabled } from "./cursor-pi-tool-bridge-env.js";
+import { recordToolActivation } from "./cursor-sdk-event-debug-preturn.js";
 
 export const CURSOR_ASK_QUESTION_TOOL_NAME = "cursor_ask_question";
 export const CURSOR_ASK_QUESTION_ENV = "PI_CURSOR_ASK_QUESTION";
@@ -190,7 +191,8 @@ async function askOneQuestion(question: CursorQuestion, ctx: { ui: ExtensionCont
 }
 
 function syncCursorQuestionToolForModel(pi: Pick<ExtensionAPI, "getActiveTools" | "setActiveTools">, model: ExtensionContext["model"]): void {
-	const activeToolNames = new Set(pi.getActiveTools());
+	const beforeTools = pi.getActiveTools();
+	const activeToolNames = new Set(beforeTools);
 	const shouldBeActive = !arePiToolsDisabled(pi) && isCursorModel(model) && resolveCursorPiToolBridgeEnabled();
 	const alreadyActive = activeToolNames.has(CURSOR_ASK_QUESTION_TOOL_NAME);
 	if (shouldBeActive === alreadyActive) return;
@@ -199,7 +201,9 @@ function syncCursorQuestionToolForModel(pi: Pick<ExtensionAPI, "getActiveTools" 
 	} else {
 		activeToolNames.delete(CURSOR_ASK_QUESTION_TOOL_NAME);
 	}
-	pi.setActiveTools([...activeToolNames]);
+	const afterTools = [...activeToolNames];
+	recordToolActivation({ source: "cursor-question-tool", reason: shouldBeActive ? "activate" : "deactivate", before: beforeTools, after: afterTools });
+	pi.setActiveTools(afterTools);
 }
 
 function emitCursorAskQuestionBlockedEvent(

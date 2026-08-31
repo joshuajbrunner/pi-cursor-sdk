@@ -1,4 +1,8 @@
 export const CURSOR_SDK_EVENT_DEBUG_ENV = "PI_CURSOR_SDK_EVENT_DEBUG";
+export function resolveCursorSdkEventDebugEnabled(env = process.env) {
+	const value = String(env[CURSOR_SDK_EVENT_DEBUG_ENV] ?? "").trim().toLowerCase();
+	return ["1", "true", "on", "yes", "enabled"].includes(value);
+}
 export const CURSOR_SDK_EVENT_DEBUG_DIR_ENV = "PI_CURSOR_SDK_EVENT_DEBUG_DIR";
 export const CURSOR_SDK_EVENT_DEBUG_RUN_DIR_ENV = "PI_CURSOR_SDK_EVENT_DEBUG_RUN_DIR";
 export const CURSOR_SDK_EVENT_DEBUG_SESSION_DIR_ENV = "PI_CURSOR_SDK_EVENT_DEBUG_SESSION_DIR";

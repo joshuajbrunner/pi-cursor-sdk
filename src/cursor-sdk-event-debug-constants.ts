@@ -5,6 +5,7 @@ import {
 	CURSOR_SDK_EVENT_DEBUG_RUN_DIR_ENV,
 	CURSOR_SDK_EVENT_DEBUG_SESSION_DIR_ENV,
 	CURSOR_SDK_EVENT_DEBUG_STDERR_ENV,
+	resolveCursorSdkEventDebugEnabled,
 } from "../shared/cursor-sdk-event-debug-env.mjs";
 
 export {
@@ -13,6 +14,7 @@ export {
 	CURSOR_SDK_EVENT_DEBUG_RUN_DIR_ENV,
 	CURSOR_SDK_EVENT_DEBUG_SESSION_DIR_ENV,
 	CURSOR_SDK_EVENT_DEBUG_STDERR_ENV,
+	resolveCursorSdkEventDebugEnabled,
 };
 export const CURSOR_SDK_EVENT_DEBUG_LOG_PREFIX = "[pi-cursor-sdk:sdk-events]";
 
@@ -38,6 +40,11 @@ export const ARTIFACTS = {
 	piSessionSnapshot: "pi-session-snapshot.jsonl",
 	finalPartial: "final-partial.json",
 	errors: "errors.jsonl",
+	lifecycle: "lifecycle.jsonl",
+	promptMutations: "prompt-mutations.jsonl",
+	toolActivation: "tool-activation.jsonl",
+	skillState: "skill-state.jsonl",
+	promptMutationsDiff: "prompt-mutations.diff",
 	waitResult: "wait-result.json",
 	conversation: "conversation.json",
 	summary: "summary.json",

@@ -1,0 +1,8 @@
+{"type":"lifecycle","hook":"turnStart","phase":"enter","depth":1,"seq":1}
+{"type":"lifecycle","hook":"beforeAgentStart","phase":"enter","depth":2,"seq":2}
+{"type":"lifecycle","hook":"beforeAgentStart","phase":"exit","depth":2,"seq":3}
+{"type":"lifecycle","hook":"turnStart","phase":"exit","depth":1,"seq":4}
+{"type":"lifecycle","hook":"a","phase":"enter","depth":1,"seq":5}
+{"type":"lifecycle","hook":"b","phase":"enter","depth":1,"seq":6}
+{"type":"lifecycle","hook":"b","phase":"exit","depth":1,"seq":7}
+{"type":"lifecycle","hook":"a","phase":"exit","depth":1,"seq":8}

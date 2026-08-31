@@ -19,6 +19,7 @@ import {
 } from "./cursor-native-tool-display-state.js";
 import { isCursorReplayToolName } from "./cursor-tool-presentation-registry.js";
 import { registerNativeCursorTool } from "./cursor-native-tool-display-tools.js";
+import { recordToolActivation } from "./cursor-sdk-event-debug-preturn.js";
 
 export const CURSOR_CORE_PI_REPLAY_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
 const CORE_PI_TOOL_NAMES = new Set<string>(CURSOR_CORE_PI_REPLAY_TOOL_NAMES);
@@ -73,14 +74,19 @@ function hasAttemptedNativeCursorToolRegistration(): boolean {
 
 function removeRegisteredNonCoreNativeCursorTools(pi: CursorNativeToolActivationApi): void {
 	if (registeredNativeToolNames.size === 0) return;
-	const activeToolNames = new Set(pi.getActiveTools());
+	const beforeTools = pi.getActiveTools();
+	const activeToolNames = new Set(beforeTools);
 	let changed = false;
 	for (const toolName of registeredNativeToolNames) {
 		if (isCursorCorePiReplayToolName(toolName)) continue;
 		if (!activeToolNames.delete(toolName)) continue;
 		changed = true;
 	}
-	if (changed) pi.setActiveTools([...activeToolNames]);
+	if (changed) {
+		const afterTools = [...activeToolNames];
+		recordToolActivation({ source: "cursor-native-tool-display-registration", reason: "remove-non-core", before: beforeTools, after: afterTools });
+		pi.setActiveTools(afterTools);
+	}
 }
 
 export function syncRegisteredNativeCursorToolsForModel(
@@ -93,7 +99,8 @@ export function syncRegisteredNativeCursorToolsForModel(
 		return;
 	}
 	if (arePiToolsDisabled(pi)) return;
-	const activeToolNames = new Set(pi.getActiveTools());
+	const beforeTools = pi.getActiveTools();
+	const activeToolNames = new Set(beforeTools);
 	let changed = false;
 	for (const toolName of registeredNativeToolNames) {
 		if (isCursorReplayToolName(toolName) && !CURSOR_MODEL_ACTIVE_REPLAY_TOOL_NAMES.some((activeReplayToolName) => activeReplayToolName === toolName)) continue;
@@ -101,7 +108,11 @@ export function syncRegisteredNativeCursorToolsForModel(
 		activeToolNames.add(toolName);
 		changed = true;
 	}
-	if (changed) pi.setActiveTools([...activeToolNames]);
+	if (changed) {
+		const afterTools = [...activeToolNames];
+		recordToolActivation({ source: "cursor-native-tool-display-registration", reason: "activate", before: beforeTools, after: afterTools });
+		pi.setActiveTools(afterTools);
+	}
 }
 
 function ensureNativeCursorToolsRegisteredForModel(pi: CursorNativeToolRegistryApi, ctx: NativeRegistrationContext): void {

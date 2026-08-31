@@ -12,7 +12,7 @@ import {
 	type CursorSessionSendPlan,
 } from "./cursor-session-agent.js";
 import type { CursorPiBridgeToolRequest } from "./cursor-pi-tool-bridge.js";
-import { buildCursorPrompt, estimateCursorPromptTokens } from "./context.js";
+import { buildCursorPrompt, computeCursorBootstrapObservation, estimateCursorPromptTokens } from "./context.js";
 import { getCursorPromptOptions } from "./cursor-usage-accounting.js";
 import { getActiveContextToolNames } from "./cursor-context-tools.js";
 import type { CursorLiveRun } from "./cursor-live-run-coordinator.js";
@@ -311,10 +311,16 @@ async function prepareCursorLocalProviderTurn(
 				}),
 			};
 		};
+		// Compute against the state used for the decision: the resetAgent branch below replaces the lease
+		// with a fresh, unbootstrapped agent, which would hide the wasted bootstrap this observation explains.
+		const bootstrapObservation = sdkEventDebug
+			? computeCursorBootstrapObservation(sessionAgentLease.sendState, context, sessionAgentScopeKey)
+			: undefined;
 		let sendPlan = planCursorSessionSend(sessionAgentLease.sendState, context);
 		if (sessionAgentLease.created && sessionAgentLease.resumed && sendPlan.mode === "incremental") {
 			sendPlan = { mode: "bootstrap", resetAgent: false, reason: "process_resume" };
 		}
+		const resetPathRan = sendPlan.resetAgent;
 		let promptOptions = buildPromptOptions(sendPlan);
 		let prompt = buildCursorSessionSendPrompt(context, promptOptions, sendPlan);
 		if (sendPlan.resetAgent) {
@@ -350,6 +356,8 @@ async function prepareCursorLocalProviderTurn(
 			settingSources: settingSources ?? null,
 			sendState: sessionAgentLease.sendState,
 			sendPlan,
+			...(bootstrapObservation ?? {}),
+			resetPathRan,
 			promptOptions,
 			toolManifestEnabled: resolveCursorToolManifestEnabled(),
 			agentMode,

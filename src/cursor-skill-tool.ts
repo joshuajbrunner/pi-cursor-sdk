@@ -14,6 +14,7 @@ import { isCursorModel } from "./cursor-model.js";
 import { registerCursorModelLifecycle, type CursorModelLifecycleExtensionApi } from "./cursor-model-lifecycle.js";
 import { resolveCursorPiToolBridgeEnabled } from "./cursor-pi-tool-bridge-env.js";
 import { resolveEffectiveCursorConfigForContext } from "./cursor-runtime-state.js";
+import { recordPromptMutation, recordSkillState, recordToolActivation } from "./cursor-sdk-event-debug-preturn.js";
 
 export const CURSOR_ACTIVATE_SKILL_TOOL_NAME = "cursor_activate_skill";
 export const CURSOR_ACTIVATE_SKILL_MCP_NAME = "pi__cursor_activate_skill";
@@ -51,8 +52,10 @@ function getVisibleSkills(skills: readonly Skill[] | undefined): Skill[] {
 	return (skills ?? []).filter((skill) => !skill.disableModelInvocation);
 }
 
-function setCurrentSkills(skills: readonly Skill[] | undefined): void {
+function setCurrentSkills(skills: readonly Skill[] | undefined, site = "unknown"): void {
+	const beforeKeys = [...currentSkillsByName.keys()].sort();
 	currentSkillsByName = new Map(getVisibleSkills(skills).map((skill) => [skill.name, skill]));
+	recordSkillState({ site, operation: "set", beforeKeys, afterKeys: [...currentSkillsByName.keys()].sort() });
 }
 
 function getAvailableSkillNames(): string[] {
@@ -75,7 +78,8 @@ function syncCursorSkillToolForModel(
 	model: ExtensionContext["model"],
 	runtime: CursorRuntime,
 ): void {
-	const activeToolNames = new Set(pi.getActiveTools());
+	const beforeTools = pi.getActiveTools();
+	const activeToolNames = new Set(beforeTools);
 	const shouldBeActive = !arePiToolsDisabled(pi) && shouldExposeSkillTool(model, runtime);
 	const alreadyActive = activeToolNames.has(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
 	if (shouldBeActive === alreadyActive) return;
@@ -84,7 +88,9 @@ function syncCursorSkillToolForModel(
 	} else {
 		activeToolNames.delete(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
 	}
-	pi.setActiveTools([...activeToolNames]);
+	const afterTools = [...activeToolNames];
+	recordToolActivation({ source: "cursor-skill-tool", reason: shouldBeActive ? "activate" : "deactivate", before: beforeTools, after: afterTools });
+	pi.setActiveTools(afterTools);
 }
 
 export function formatCursorSkillsForPrompt(skills: readonly Skill[]): string {
@@ -231,34 +237,35 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 		},
 	});
 
-	const clearSkillsAndSync = (model: ExtensionContext["model"], runtime: CursorRuntime = "local"): void => {
-		setCurrentSkills([]);
+	const clearSkillsAndSync = (model: ExtensionContext["model"], runtime: CursorRuntime = "local", site = "lifecycle"): void => {
+		setCurrentSkills([], site);
 		syncCursorSkillToolForModel(pi, model, runtime);
 	};
 
 	registerCursorModelLifecycle(pi, {
 		sessionStart: (_event, ctx) => {
-			clearSkillsAndSync(ctx.model);
+			clearSkillsAndSync(ctx.model, "local", "session_start");
 		},
 		modelSelect: (event) => {
-			clearSkillsAndSync(event.model);
+			clearSkillsAndSync(event.model, "local", "model_select");
 		},
 		turnStart: (_event, ctx) => {
 			const cursorModel = isCursorModel(ctx.model);
 			const runtime = resolveEffectiveRuntimeForSkillLifecycle(cursorModel, ctx);
-			if (!cursorModel || runtime === "cloud") setCurrentSkills([]);
+			if (!cursorModel || runtime === "cloud") setCurrentSkills([], "turn_start");
 			syncCursorSkillToolForModel(pi, ctx.model, runtime);
 		},
 		beforeAgentStart: (event, ctx) => {
 			const cursorModel = isCursorModel(ctx.model);
 			const runtime = resolveEffectiveRuntimeForSkillLifecycle(cursorModel, ctx);
 			if (cursorModel && runtime === "local") {
-				setCurrentSkills(event.systemPromptOptions?.skills);
+				setCurrentSkills(event.systemPromptOptions?.skills, "before_agent_start");
 			} else {
-				setCurrentSkills([]);
+				setCurrentSkills([], "before_agent_start");
 			}
 			syncCursorSkillToolForModel(pi, ctx.model, runtime);
 			const resolved = resolveCursorSkillSystemPrompt(event.systemPrompt, ctx.model, event.systemPromptOptions, runtime);
+			recordPromptMutation({ label: "skill-rewrite", hook: "before_agent_start", before: event.systemPrompt, after: resolved });
 			if (resolved === event.systemPrompt) return undefined;
 			return { systemPrompt: resolved };
 		},

@@ -1,0 +1,2 @@
+{"type":"prompt-mutation","label":"sanitize","changed":true,"afterBody":"prompt-bodies/10-sanitize.after.txt","seq":10}
+{"type":"prompt-mutation","label":"skill-rewrite","changed":true,"afterBody":"prompt-bodies/20-skill-rewrite.after.txt","seq":20}

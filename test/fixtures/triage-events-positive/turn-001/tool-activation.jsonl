@@ -1,0 +1,2 @@
+{"type":"tool-activation","source":"cursor-skill-tool","before":["read"],"after":["read","cursor_activate_skill"],"added":["cursor_activate_skill"],"removed":[],"seq":10}
+{"type":"tool-activation","source":"cursor-question-tool","before":["read"],"after":["read","question"],"added":["question"],"removed":[],"seq":11}

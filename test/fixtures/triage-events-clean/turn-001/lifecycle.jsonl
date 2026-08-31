@@ -1,0 +1,4 @@
+{"hook":"a","phase":"enter","depth":1,"seq":1}
+{"hook":"a","phase":"exit","depth":1,"seq":2}
+{"hook":"b","phase":"enter","depth":1,"seq":3}
+{"hook":"b","phase":"exit","depth":1,"seq":4}
