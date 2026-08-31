@@ -13,7 +13,7 @@ import type { CursorRuntime } from "./cursor-config.js";
 import { isCursorModel } from "./cursor-model.js";
 import { registerCursorModelLifecycle, type CursorModelLifecycleExtensionApi } from "./cursor-model-lifecycle.js";
 import { resolveCursorPiToolBridgeEnabled } from "./cursor-pi-tool-bridge-env.js";
-import { resolveEffectiveCursorConfigForContext } from "./cursor-runtime-state.js";
+import { resolveCursorStatusRuntime } from "./cursor-runtime-state.js";
 import { recordPromptMutation, recordSkillState, recordToolActivation } from "./cursor-sdk-event-debug-preturn.js";
 
 export const CURSOR_ACTIVATE_SKILL_TOOL_NAME = "cursor_activate_skill";
@@ -65,18 +65,20 @@ function getAvailableSkillNames(): string[] {
 function resolveEffectiveRuntimeForSkillLifecycle(
 	cursorModel: boolean,
 	ctx: Pick<ExtensionContext, "cwd"> & Partial<Pick<ExtensionContext, "isProjectTrusted">>,
-): CursorRuntime {
-	return cursorModel ? resolveEffectiveCursorConfigForContext(ctx).runtime.value : "local";
+): CursorRuntime | undefined {
+	if (!cursorModel) return "local";
+	const resolution = resolveCursorStatusRuntime(ctx);
+	return resolution.kind === "valid" ? resolution.runtime.value : undefined;
 }
 
-function shouldExposeSkillTool(model: ExtensionContext["model"], runtime: CursorRuntime): boolean {
-	return runtime === "local" && isCursorModel(model) && resolveCursorPiToolBridgeEnabled() && currentSkillsByName.size > 0;
+function shouldExposeSkillTool(model: ExtensionContext["model"], runtime?: CursorRuntime): boolean {
+	return runtime === "local" && isCursorModel(model) && resolveCursorPiToolBridgeEnabled();
 }
 
 function syncCursorSkillToolForModel(
 	pi: Pick<ExtensionAPI, "getActiveTools" | "setActiveTools">,
 	model: ExtensionContext["model"],
-	runtime: CursorRuntime,
+	runtime?: CursorRuntime,
 ): void {
 	const beforeTools = pi.getActiveTools();
 	const activeToolNames = new Set(beforeTools);
@@ -237,22 +239,26 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 		},
 	});
 
-	const clearSkillsAndSync = (model: ExtensionContext["model"], runtime: CursorRuntime = "local", site = "lifecycle"): void => {
+	const clearSkillsAndSync = (
+		ctx: Pick<ExtensionContext, "model" | "cwd"> & Partial<Pick<ExtensionContext, "isProjectTrusted">>,
+		site = "lifecycle",
+	): void => {
 		setCurrentSkills([], site);
-		syncCursorSkillToolForModel(pi, model, runtime);
+		const runtime = resolveEffectiveRuntimeForSkillLifecycle(isCursorModel(ctx.model), ctx);
+		syncCursorSkillToolForModel(pi, ctx.model, runtime);
 	};
 
 	registerCursorModelLifecycle(pi, {
 		sessionStart: (_event, ctx) => {
-			clearSkillsAndSync(ctx.model, "local", "session_start");
+			clearSkillsAndSync(ctx, "session_start");
 		},
-		modelSelect: (event) => {
-			clearSkillsAndSync(event.model, "local", "model_select");
+		modelSelect: (_event, ctx) => {
+			clearSkillsAndSync(ctx, "model_select");
 		},
 		turnStart: (_event, ctx) => {
 			const cursorModel = isCursorModel(ctx.model);
 			const runtime = resolveEffectiveRuntimeForSkillLifecycle(cursorModel, ctx);
-			if (!cursorModel || runtime === "cloud") setCurrentSkills([], "turn_start");
+			if (!cursorModel || runtime !== "local") setCurrentSkills([], "turn_start");
 			syncCursorSkillToolForModel(pi, ctx.model, runtime);
 		},
 		beforeAgentStart: (event, ctx) => {
@@ -264,6 +270,7 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 				setCurrentSkills([], "before_agent_start");
 			}
 			syncCursorSkillToolForModel(pi, ctx.model, runtime);
+			if (!runtime) return undefined;
 			const resolved = resolveCursorSkillSystemPrompt(event.systemPrompt, ctx.model, event.systemPromptOptions, runtime);
 			recordPromptMutation({ label: "skill-rewrite", hook: "before_agent_start", before: event.systemPrompt, after: resolved });
 			if (resolved === event.systemPrompt) return undefined;

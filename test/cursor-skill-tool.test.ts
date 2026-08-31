@@ -226,7 +226,7 @@ describe("registerCursorSkillTool", () => {
 		expect(pi._activeToolNames()).not.toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
 	});
 
-	it("does not expose the activation tool when no visible skills are available", async () => {
+	it("keeps the activation tool exposed when no visible skills are available", async () => {
 		const pi = createPiHarness({ activeTools: ["read"] });
 		registerCursorSkillTool(pi);
 		await pi.invokeEvent(
@@ -240,6 +240,79 @@ describe("registerCursorSkillTool", () => {
 			{ model: makeModel("composer-2.5"), cwd: "/repo" },
 		);
 
+		expect(pi._activeToolNames()).toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+	});
+
+	it("activates the tool at session_start, before the first prompt is built", async () => {
+		const pi = createPiHarness({ activeTools: ["read"] });
+		registerCursorSkillTool(pi);
+
+		await pi.runSessionStart({ model: makeModel("composer-2.5"), cwd: "/repo" });
+
+		expect(pi._activeToolNames()).toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+	});
+
+	it("toggles the tool on model_select transitions between Cursor and non-Cursor models", async () => {
+		const pi = createPiHarness({ activeTools: ["read"] });
+		registerCursorSkillTool(pi);
+		const nonCursorModel = { provider: "anthropic", id: "claude-sonnet-4-5" } as NonNullable<ExtensionContext["model"]>;
+
+		await pi.runModelSelect(makeModel("composer-2.5"), { cwd: "/repo" });
+		expect(pi._activeToolNames()).toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+
+		await pi.runModelSelect(nonCursorModel, { cwd: "/repo" });
 		expect(pi._activeToolNames()).not.toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+	});
+
+	it("keeps the tool inactive at session_start in cloud runtime", async () => {
+		process.env.PI_CURSOR_RUNTIME = "cloud";
+		const pi = createPiHarness({ activeTools: ["read"] });
+		registerCursorSkillTool(pi);
+
+		await pi.runSessionStart({ model: makeModel("composer-2.5"), cwd: "/repo" });
+
+		expect(pi._activeToolNames()).not.toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+	});
+
+	it("fails closed without throwing when the Cursor runtime config is invalid", async () => {
+		process.env.PI_CURSOR_RUNTIME = "remote";
+		const pi = createPiHarness({ activeTools: ["read"] });
+		registerCursorSkillTool(pi);
+		const model = makeModel("composer-2.5");
+		const skill = makeSkill({ name: "global-skill", description: "Global skill", filePath: "/repo/global-skill/SKILL.md" });
+
+		await pi.runSessionStart({ model, cwd: "/repo" });
+		expect(pi._activeToolNames()).not.toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+
+		await pi.runModelSelect(model, { cwd: "/repo" });
+		expect(pi._activeToolNames()).not.toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+
+		const result = await pi.invokeEvent(
+			"before_agent_start",
+			{
+				type: "before_agent_start",
+				prompt: "hello",
+				systemPrompt: "System prompt.",
+				systemPromptOptions: { ...createDefaultSystemPromptOptions("/repo"), skills: [skill] },
+			} satisfies BeforeAgentStartEvent,
+			{ model, cwd: "/repo" },
+		);
+
+		expect(result).toBeUndefined();
+		expect(pi._activeToolNames()).not.toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+	});
+
+	it("reports no available skills when the tool is invoked before skills load", async () => {
+		const pi = createPiHarness({ activeTools: ["read"] });
+		registerCursorSkillTool(pi);
+		const model = makeModel("composer-2.5");
+
+		await pi.runSessionStart({ model, cwd: "/repo" });
+		expect(pi._activeToolNames()).toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+
+		const tool = getHarnessRegisteredTool(pi._tools, CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+		await expect(
+			tool.execute("call-1", { name: "global-skill" }, undefined, undefined, createExtensionTestContext({ model, cwd: "/repo" })),
+		).rejects.toThrow(/Available skills: none/);
 	});
 });
