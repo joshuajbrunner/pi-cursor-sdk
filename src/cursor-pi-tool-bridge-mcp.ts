@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SDKCustomTool, SDKCustomToolContent, SDKCustomToolContext, SDKCustomToolResult, SDKJsonValue } from "@cursor/sdk";
 import type { Context, ToolResultMessage } from "@earendil-works/pi-ai";
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/server";
 import { buildCursorPiBridgeMcpToolDescription, CURSOR_PI_BRIDGE_MCP_TOOL_PREFIX } from "./cursor-bridge-contract.js";
 import type { CursorPiBridgeToolDefinition, CursorPiMcpInputSchema, CursorPiToolBridgeSnapshot } from "./cursor-pi-tool-bridge-types.js";
 import { asRecord, stringifyUnknown } from "./cursor-record-utils.js";
@@ -82,22 +82,15 @@ export type CursorPiBridgeCustomToolInvoker = (
 	context: SDKCustomToolContext,
 ) => Promise<CallToolResult>;
 
-/**
- * Builds the in-process `local.customTools` map from a bridge snapshot. Keys
- * reuse each tool's existing `mcpToolName` (the `mcp_pi_bridge_*` stem) so the
- * model-facing names and the display/recognition layer are identical to the
- * HTTP-MCP transport.
- */
-/**
- * Reinterprets a bridge tool's JSON-Schema object as the SDK custom-tool input
- * schema type. The bridge schema is already JSON (its open `[key: string]:
- * unknown` index just isn't statically narrowed to `SDKJsonValue`), so this is a
- * type-level reinterpretation with no runtime change.
- */
+/** Reinterprets the normalized MCP JSON Schema as the SDK JSON-valued schema. */
 function toCustomToolInputSchema(schema: CursorPiMcpInputSchema): Record<string, SDKJsonValue> {
 	return schema as Record<string, SDKJsonValue>;
 }
 
+/**
+ * Builds `local.customTools` using the existing MCP tool names (`pi__*`) so
+ * both transports share tool recognition and dispatch.
+ */
 export function snapshotToCustomTools(
 	snapshot: CursorPiToolBridgeSnapshot,
 	invoke: CursorPiBridgeCustomToolInvoker,

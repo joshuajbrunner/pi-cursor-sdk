@@ -1,5 +1,6 @@
 import type { McpServerConfig, SDKCustomTool } from "@cursor/sdk";
 import type { Context, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { Tool as McpTool } from "@modelcontextprotocol/server";
 import type { CursorPiToolBridgeTransport } from "./cursor-pi-tool-bridge-env.js";
 import type { CursorSdkEventDebugRecorder } from "./cursor-sdk-event-debug.js";
 import type {
@@ -20,12 +21,7 @@ export type CursorPiToolBridgeExtensionApi = CursorPiToolBridgeSnapshotApi & {
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
 };
 
-export interface CursorPiMcpInputSchema {
-	type: "object";
-	properties?: Record<string, object>;
-	required?: string[];
-	[key: string]: unknown;
-}
+export type CursorPiMcpInputSchema = McpTool["inputSchema"];
 
 export interface CursorPiBridgeToolDefinition {
 	piToolName: string;
